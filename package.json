@@ -1,0 +1,19 @@
+{
+  "name": "diago",
+  "version": "1.0.0",
+  "description": "Diago — agent téléphonique IA + appli de suivi des appels et des tournées pour cabinets",
+  "type": "module",
+  "main": "src/server.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test:calls": "node scripts/fake-call.js"
+  },
+  "dependencies": {
+    "express": "^4.22.3",
+    "pg": "^8.23.1"
+  }
+}

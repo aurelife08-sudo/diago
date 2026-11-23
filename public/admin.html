@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex" />
+  <title>Diago · Admin</title>
+  <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/app.css" />
+  <style>
+    .app { padding-bottom: 40px; }
+    .cl { padding: 16px 18px; }
+    .cl .row { margin-bottom: 4px; }
+    .meta { color: var(--muted); font-size: 13.5px; }
+    .actions { flex-wrap: wrap; }
+    .actions .btn { flex: 0 1 auto; }
+    .off { opacity: .55; }
+    pre { background: rgba(255,255,255,.8); border-radius: 16px; padding: 14px; font-size: 12.5px; overflow-x: auto; box-shadow: 0 0 0 .5px rgba(0,0,0,.05); }
+  </style>
+</head>
+<body>
+  <div class="bg" aria-hidden="true"></div>
+  <div class="app">
+    <header class="top card">
+      <div class="brand">
+        <div class="logo"><svg class="i" viewBox="0 0 24 24"><path d="M6.6 10.8a15 15 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25c1.1.37 2.3.57 3.6.57a1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.25.2 2.45.57 3.57a1 1 0 0 1-.25 1z"/></svg></div>
+        <div><div class="brand-name">Diago</div><div class="brand-sub">Administration</div></div>
+      </div>
+      <button class="btn sm" id="logout" hidden>Se déconnecter</button>
+    </header>
+
+    <form class="form card group" id="login" style="margin-top:16px">
+      <label class="field"><span>Clé admin</span><input id="key" type="password" autocomplete="current-password" required /></label>
+      <button class="btn primary block" style="margin:6px 0 12px">Entrer</button>
+    </form>
+
+    <div id="main" hidden>
+      <div class="section-t">Nouveau cabinet</div>
+      <form class="form" id="create" autocomplete="off">
+        <div class="card group">
+          <label class="field"><span>Nom du cabinet *</span><input name="cname" required placeholder="Cabinet Diag Alpes" /></label>
+          <label class="field"><span>Métier</span><input name="trade" placeholder="Diagnostic immobilier" /></label>
+          <label class="field"><span>Email(s) pour les résumés</span><input name="email" placeholder="contact@cabinet.fr" /></label>
+          <label class="field"><span>Numéro de l'agent téléphonique (celui que les clients appellent)</span><input name="agent_number" placeholder="+33 4 50 00 00 00" /></label>
+          <label class="field"><span>Adresse du cabinet (départ des tournées)</span><input name="home_address" placeholder="3 rue Royale, 74000 Annecy" /></label>
+        </div>
+        <button class="btn primary block">Créer le cabinet</button>
+      </form>
+
+      <div class="section-t">Cabinets</div>
+      <div class="list" id="clients"></div>
+
+      <div class="section-t">Brancher l'agent téléphonique</div>
+      <div class="card group" style="padding:14px 16px">
+        <p style="margin:0 0 8px">Adresses à coller dans la plateforme vocale (le cabinet est retrouvé grâce au numéro appelé) :</p>
+        <p class="meta" style="margin:0 0 4px">Vapi (Server URL) : <code id="u-vapi"></code></p>
+        <p class="meta" style="margin:0 0 4px">Retell (Webhook URL) : <code id="u-retell"></code></p>
+        <p class="meta" style="margin:0 0 10px">Agent fait maison : <code id="u-gen"></code></p>
+        <p style="margin:0 0 6px">Format à envoyer en POST (JSON) à la fin de chaque appel, avec l'en-tête <code>x-webhook-secret</code> :</p>
+<pre>{
+  "call_id": "identifiant-unique-de-l-appel",
+  "to_number": "+33450000000",
+  "from_number": "+33612345678",
+  "started_at": "2026-11-23T14:05:00Z",
+  "duration_sec": 74,
+  "transcript": "AI: Bonjour…\nUser: Bonjour, je vends…",
+  "summary": "facultatif",
+  "recording_url": "facultatif"
+}</pre>
+        <p class="meta" style="margin:0">La transcription peut aussi être une liste : <code>[{"role":"assistant","text":"…"},{"role":"user","text":"…"}]</code></p>
+      </div>
+    </div>
+  </div>
+  <div class="toast" id="toast" hidden></div>
+
+<script>
+{
+  const $ = (s) => document.querySelector(s);
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+  let key = '';
+  try { key = sessionStorage.getItem('diago_admin') || ''; } catch {}
+  let tt;
+  const toast = (m) => { const t = $('#toast'); t.textContent = m; t.hidden = false; clearTimeout(tt); tt = setTimeout(() => (t.hidden = true), 2800); };
+  const base = location.origin;
+  $('#u-vapi').textContent = `${base}/webhooks/vapi`;
+  $('#u-retell').textContent = `${base}/webhooks/retell`;
+  $('#u-gen').textContent = `${base}/webhooks/generic`;
+
+  async function api(path, opts = {}) {
+    const res = await fetch('/admin/api' + path, { method: opts.method || 'GET', headers: { 'content-type': 'application/json', 'x-admin-key': key }, body: opts.body ? JSON.stringify(opts.body) : undefined });
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 401) { logout(); throw new Error('Clé admin invalide'); }
+    if (!res.ok) throw new Error(data.error || `Erreur ${res.status}`);
+    return data;
+  }
+  const link = (c) => `${base}/?t=${c.token}`;
+  const fmt = (n) => { const m = /^\+33(\d)(\d{2})(\d{2})(\d{2})(\d{2})$/.exec(n || ''); return m ? `0${m[1]} ${m[2]} ${m[3]} ${m[4]} ${m[5]}` : (n || '—'); };
+
+  async function load() {
+    const list = await api('/clients');
+    $('#clients').innerHTML = list.length ? list.map((c) => `
+      <article class="card cl ${c.active ? '' : 'off'}" data-id="${c.id}">
+        <div class="row"><span class="name">${esc(c.name)}</span><span class="when">${c.calls} appel${c.calls > 1 ? 's' : ''}</span></div>
+        <div class="meta">Agent : ${esc(fmt(c.agent_number))} · ${esc(c.email || 'pas d\'email')}</div>
+        <div class="meta">${esc(c.home_address || 'Adresse du cabinet non renseignée')}${c.last_call ? ` · dernier appel le ${new Date(c.last_call).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' })}` : ''}</div>
+        <div class="actions">
+          <button class="btn primary sm" data-a="copy">Copier son lien</button>
+          <a class="btn sm" href="${esc(link(c))}" target="_blank" rel="noopener">Ouvrir</a>
+          <button class="btn sm" data-a="test">Appel de test</button>
+          <button class="btn sm" data-a="num">Changer le numéro</button>
+          <button class="btn sm" data-a="relink">Nouveau lien</button>
+          <button class="btn sm ${c.active ? 'danger' : ''}" data-a="toggle">${c.active ? 'Désactiver' : 'Réactiver'}</button>
+        </div>
+      </article>`).join('') : '<div class="card empty"><b>Aucun cabinet</b>Créez le premier ci-dessus.</div>';
+    window._clients = list;
+  }
+  function logout() { key = ''; try { sessionStorage.removeItem('diago_admin'); } catch {} $('#main').hidden = true; $('#logout').hidden = true; $('#login').hidden = false; }
+  async function enter() {
+    try { await load(); $('#login').hidden = true; $('#main').hidden = false; $('#logout').hidden = false; try { sessionStorage.setItem('diago_admin', key); } catch {} }
+    catch (e) { toast(e.message); }
+  }
+  $('#login').addEventListener('submit', (e) => { e.preventDefault(); key = $('#key').value.trim(); enter(); });
+  $('#logout').addEventListener('click', logout);
+  $('#create').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    try {
+      const c = await api('/clients', { method: 'POST', body: { name: f.cname.value, trade: f.trade.value, email: f.email.value, agent_number: f.agent_number.value, home_address: f.home_address.value } });
+      f.reset(); await load();
+      try { await navigator.clipboard.writeText(link(c)); toast('Cabinet créé, lien copié'); } catch { toast('Cabinet créé'); }
+    } catch (err) { toast(err.message); }
+  });
+  $('#clients').addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-a]'); if (!b) return;
+    const c = window._clients.find((x) => x.id === Number(b.closest('[data-id]').dataset.id));
+    try {
+      if (b.dataset.a === 'copy') { await navigator.clipboard.writeText(link(c)).then(() => toast('Lien copié'), () => toast(link(c))); }
+      if (b.dataset.a === 'test') { b.disabled = true; const r = await api(`/clients/${c.id}/test-call`, { method: 'POST' }); toast(`Appel de test créé${r.email_sent ? ' et email envoyé' : ''}`); await load(); }
+      if (b.dataset.a === 'num') {
+        const field = document.createElement('div');
+        field.className = 'inline'; field.style.marginTop = '10px';
+        field.innerHTML = `<input class="search" style="flex:1;border:0;padding:0 14px" value="${esc(c.agent_number || '')}" placeholder="+33 4 50 00 00 00" /><button class="btn sm primary">OK</button>`;
+        b.closest('.cl').append(field);
+        field.querySelector('button').onclick = async () => { try { await api(`/clients/${c.id}`, { method: 'PATCH', body: { agent_number: field.querySelector('input').value } }); toast('Numéro enregistré'); load(); } catch (err) { toast(err.message); } };
+      }
+      if (b.dataset.a === 'relink') {
+        if (!b.dataset.sure) { b.dataset.sure = 1; b.textContent = "Confirmer (l'ancien lien ne marchera plus)"; return; }
+        const n = await api(`/clients/${c.id}`, { method: 'PATCH', body: { new_link: true } }); await load();
+        navigator.clipboard.writeText(link(n)).then(() => toast('Nouveau lien copié'), () => toast('Nouveau lien créé'));
+      }
+      if (b.dataset.a === 'toggle') { await api(`/clients/${c.id}`, { method: 'PATCH', body: { active: !c.active } }); load(); }
+    } catch (err) { toast(err.message); b.disabled = false; }
+  });
+  if (key) enter();
+}
+</script>
+</body>
+</html>
