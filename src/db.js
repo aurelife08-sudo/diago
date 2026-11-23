@@ -7,11 +7,15 @@ if (!url) {
   process.exit(1);
 }
 
+// Schéma dédié (permet de partager une base existante sans mélanger les tables)
+const SCHEMA = (process.env.DB_SCHEMA || '').replace(/[^a-z0-9_]/gi, '');
+
 const local = /localhost|127\.0\.0\.1|\/tmp|host=\//.test(url);
 export const pool = new pg.Pool({
   connectionString: url,
   ssl: local || process.env.PGSSL === 'off' ? false : { rejectUnauthorized: false },
   max: 5,
+  ...(SCHEMA ? { options: `-c search_path=${SCHEMA}` } : {}),
 });
 
 // Les dates (type DATE) restent des chaînes "YYYY-MM-DD"
@@ -22,6 +26,7 @@ export const one = async (text, params) => (await pool.query(text, params)).rows
 export const all = async (text, params) => (await pool.query(text, params)).rows;
 
 export async function migrate() {
+  if (SCHEMA) await q(`CREATE SCHEMA IF NOT EXISTS "${SCHEMA}"`);
   await q(`
     CREATE TABLE IF NOT EXISTS clients (
       id            SERIAL PRIMARY KEY,
