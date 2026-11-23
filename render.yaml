@@ -19,7 +19,7 @@ services:
       - key: WEBHOOK_SECRET
         generateValue: true
       - key: PUBLIC_URL
-        value: https://diago.onrender.com
+        value: https://diago-apx8.onrender.com
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: RESEND_API_KEY
