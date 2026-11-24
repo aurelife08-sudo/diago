@@ -24,7 +24,7 @@ const pick = (...v) => v.find((x) => x !== undefined && x !== null && x !== '') 
 function cleanNumber(n) {
   if (!n || typeof n !== 'string') return null;
   if (n.includes('*')) return null;
-  return n;
+  return /^\+?[\d\s().-]{6,}$/.test(n.trim()) ? n.trim() : null; // pas les adresses SIP ni les identifiants d'assistant
 }
 
 function messagesToTranscript(messages) {
@@ -68,6 +68,7 @@ export function readTelnyx(body) {
   return {
     eventType,
     conversationId: pick(p.conversation_id, d.conversation_id, body.conversation_id),
+    assistantId: pick(p.assistant_id, d.assistant_id, body.assistant_id),
     callControlId: pick(p.call_control_id, d.call_control_id),
     from: cleanNumber(pick(p.from, p.telnyx_end_user_target, p.metadata?.telnyx_end_user_target)),
     to: cleanNumber(pick(p.to, p.telnyx_agent_target, p.metadata?.telnyx_agent_target)),
@@ -117,6 +118,7 @@ async function enrich(info) {
     from: info.from || cleanNumber(meta?.metadata?.telnyx_end_user_target),
     to: info.to || cleanNumber(meta?.metadata?.telnyx_agent_target),
     occurredAt: info.occurredAt || meta?.created_at || null,
+    assistantId: info.assistantId || meta?.metadata?.assistant_id || null,
   };
 }
 
@@ -143,6 +145,7 @@ export async function fromTelnyx(body) {
   return {
     provider: 'telnyx',
     providerCallId: info.conversationId || info.callControlId,
+    assistantId: info.assistantId,
     toNumber: info.to,
     fromNumber: info.from,
     callerName: null,
@@ -152,4 +155,17 @@ export async function fromTelnyx(body) {
     providerSummary: info.summary,
     recordingUrl: info.recordingUrl,
   };
+}
+
+/** Conversations vocales terminées des dernières 24 h (la plus récente inactive depuis au moins 45 s). */
+export async function listFinishedConversations() {
+  const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+  const r = await telnyxGet(`/ai/conversations?created_at=gte.${encodeURIComponent(since)}&order=created_at.desc&limit=100`);
+  const now = Date.now();
+  return (r?.data ?? []).filter((c) => {
+    const ch = c.metadata?.telnyx_conversation_channel;
+    if (ch && !/phone|call|voice/i.test(ch)) return false; // pas les SMS/chats
+    const last = Date.parse(c.last_message_at || c.created_at || 0);
+    return now - last > 45000;
+  });
 }

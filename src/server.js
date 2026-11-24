@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { q, one, all, migrate } from './db.js';
 import { fromVapi, fromRetell, fromGeneric, normNumber } from './providers.js';
-import { fromTelnyx } from './telnyx.js';
+import { fromTelnyx, listFinishedConversations } from './telnyx.js';
 import { classify } from './ai.js';
 import { sendCallEmail } from './email.js';
 import { geocode, planDay } from './geo.js';
@@ -62,50 +62,97 @@ function webhookOk(req) {
 
 // ---------- Webhooks des plateformes vocales ----------
 // webhook → format commun → agent n°2 (tri IA) → base → email
+
+/** Trouve le cabinet d'un appel : numéro de l'agent, jeton dans l'URL, assistant Telnyx, ou appel déjà reçu. */
+async function findClient(evt, token) {
+  const to = normNumber(evt.toNumber);
+  if (to) { const c = await one('SELECT * FROM clients WHERE agent_number = $1 AND active', [to]); if (c) return c; }
+  if (token) { const c = await one('SELECT * FROM clients WHERE token = $1 AND active', [token]); if (c) return c; }
+  if (evt.assistantId) { const c = await one('SELECT * FROM clients WHERE telnyx_assistant_id = $1 AND active', [evt.assistantId]); if (c) return c; }
+  // Un 2e événement du même appel (ex. Telnyx call.analyzed, numéros masqués) retrouve son cabinet par l'appel déjà reçu
+  const known = evt.providerCallId ? await one('SELECT client_id FROM calls WHERE provider_call_id = $1', [evt.providerCallId]) : null;
+  return known ? one('SELECT * FROM clients WHERE id = $1 AND active', [known.client_id]) : null;
+}
+
+/** Vérifie les doublons. Retourne { duplicate, id } ou null si l'appel est à enregistrer. */
+async function dedupe(evt) {
+  if (!evt.providerCallId) return null;
+  const prev = await one('SELECT id, transcript, recording_url FROM calls WHERE provider_call_id = $1', [evt.providerCallId]);
+  if (!prev) return null;
+  if ((prev.transcript || '').length >= (evt.transcript || '').length) {
+    if (evt.recordingUrl && !prev.recording_url) await q('UPDATE calls SET recording_url = $2 WHERE id = $1', [prev.id, evt.recordingUrl]);
+    return { duplicate: true, id: prev.id };
+  }
+  await q('DELETE FROM calls WHERE id = $1', [prev.id]); // version plus complète du même appel
+  return null;
+}
+
+/** Tri IA + enregistrement + email. */
+async function storeCall(evt, client) {
+  const ai = await classify(evt);
+  const call = await one(
+    `INSERT INTO calls (client_id, provider, provider_call_id, caller_name, caller_number, started_at, duration_sec,
+       transcript, recording_url, summary, next_action, request_type, urgency, callback_before, address, diagnostics, is_spam, status)
+     VALUES ($1,$2,$3,$4,$5,COALESCE($6::timestamptz, NOW()),$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+     ON CONFLICT (provider_call_id) DO NOTHING RETURNING *`,
+    [client.id, evt.provider, evt.providerCallId, ai.caller_name, normNumber(evt.fromNumber), evt.startedAt, evt.durationSec,
+      evt.transcript, evt.recordingUrl, ai.summary, ai.next_action, ai.request_type, ai.urgency, ai.callback_before,
+      ai.address, ai.diagnostics, ai.is_spam, ai.is_spam ? 'termine' : 'a_rappeler'],
+  );
+  if (call && !call.is_spam && (await sendCallEmail(client, call))) await q('UPDATE calls SET email_sent = TRUE WHERE id = $1', [call.id]);
+  console.log(`[appel] ${call?.id ?? '(doublon)'} rangé pour ${client.name} (${ai.urgency})`);
+  return call;
+}
+
 function ingest(parse) {
   return wrap(async (req, res) => {
     if (!webhookOk(req)) return res.status(401).json({ error: 'Secret invalide' });
     const evt = await parse(req.body);
     if (!evt) return res.json({ ignored: true });
 
-    const to = normNumber(evt.toNumber);
-    // Un 2e événement du même appel (ex. Telnyx call.analyzed, numéros masqués) retrouve son cabinet par l'appel déjà reçu
-    const known = evt.providerCallId ? await one('SELECT client_id FROM calls WHERE provider_call_id = $1', [evt.providerCallId]) : null;
-    const client = (to && (await one('SELECT * FROM clients WHERE agent_number = $1 AND active', [to])))
-      || (req.query.client && (await one('SELECT * FROM clients WHERE token = $1 AND active', [req.query.client])))
-      || (known && (await one('SELECT * FROM clients WHERE id = $1 AND active', [known.client_id])));
+    const client = await findClient(evt, req.query.client);
     if (!client) {
-      console.warn('[webhook] aucun cabinet pour le numéro', evt.toNumber);
+      console.warn('[webhook] aucun cabinet pour le numéro', evt.toNumber, evt.assistantId || '');
       return res.status(404).json({ error: 'Aucun cabinet pour ce numéro' });
     }
-    if (evt.providerCallId) {
-      const prev = await one('SELECT id, transcript, recording_url FROM calls WHERE provider_call_id = $1', [evt.providerCallId]);
-      if (prev && (prev.transcript || '').length >= (evt.transcript || '').length) {
-        if (evt.recordingUrl && !prev.recording_url) await q('UPDATE calls SET recording_url = $2 WHERE id = $1', [prev.id, evt.recordingUrl]);
-        return res.json({ duplicate: true, id: prev.id });
-      }
-      if (prev) await q('DELETE FROM calls WHERE id = $1', [prev.id]); // version plus complète du même appel
-    }
+    const dup = await dedupe(evt);
+    if (dup) return res.json(dup);
     res.json({ ok: true }); // on répond vite à la plateforme, le tri se fait ensuite
-
-    try {
-      const ai = await classify(evt);
-      const call = await one(
-        `INSERT INTO calls (client_id, provider, provider_call_id, caller_name, caller_number, started_at, duration_sec,
-           transcript, recording_url, summary, next_action, request_type, urgency, callback_before, address, diagnostics, is_spam, status)
-         VALUES ($1,$2,$3,$4,$5,COALESCE($6::timestamptz, NOW()),$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
-         ON CONFLICT (provider_call_id) DO NOTHING RETURNING *`,
-        [client.id, evt.provider, evt.providerCallId, ai.caller_name, normNumber(evt.fromNumber), evt.startedAt, evt.durationSec,
-          evt.transcript, evt.recordingUrl, ai.summary, ai.next_action, ai.request_type, ai.urgency, ai.callback_before,
-          ai.address, ai.diagnostics, ai.is_spam, ai.is_spam ? 'termine' : 'a_rappeler'],
-      );
-      if (call && !call.is_spam && (await sendCallEmail(client, call))) await q('UPDATE calls SET email_sent = TRUE WHERE id = $1', [call.id]);
-      console.log(`[webhook] appel ${call?.id ?? '(doublon)'} rangé pour ${client.name} (${ai.urgency})`);
-    } catch (err) {
-      console.error('[webhook] erreur de traitement :', err);
-    }
+    try { await storeCall(evt, client); } catch (err) { console.error('[webhook] erreur de traitement :', err); }
   });
 }
+
+// Telnyx : Diago va aussi chercher lui-même les appels terminés (au cas où un webhook n'arrive pas).
+let lastSync = 0, syncing = null;
+async function syncTelnyx() {
+  if (!process.env.TELNYX_API_KEY) return { skipped: true };
+  if (syncing) return syncing;
+  syncing = (async () => {
+    let added = 0;
+    try {
+      const convs = await listFinishedConversations();
+      if (!convs.length) return { added };
+      const ids = convs.map((c) => c.id);
+      const have = new Set((await all('SELECT provider_call_id FROM calls WHERE provider_call_id = ANY($1)', [ids])).map((r) => r.provider_call_id));
+      for (const conv of convs.filter((c) => !have.has(c.id))) {
+        try {
+          const evt = await fromTelnyx({ conversation_id: conv.id, assistant_id: conv.metadata?.assistant_id });
+          if (!evt || !evt.transcript) continue;
+          const client = await findClient(evt);
+          if (!client) { console.warn('[telnyx] conversation sans cabinet :', conv.id, evt.toNumber, evt.assistantId); continue; }
+          if (await dedupe(evt)) continue;
+          if (await storeCall(evt, client)) added++;
+        } catch (err) { console.error('[telnyx] conversation', conv.id, ':', err.message); }
+      }
+    } catch (err) {
+      console.error('[telnyx] synchronisation impossible :', err.message);
+    } finally { lastSync = Date.now(); }
+    if (added) console.log(`[telnyx] ${added} appel(s) récupéré(s)`);
+    return { added };
+  })();
+  try { return await syncing; } finally { syncing = null; }
+}
+
 app.post('/webhooks/vapi', ingest(fromVapi));
 app.post('/webhooks/retell', ingest(fromRetell));
 app.post('/webhooks/generic', ingest(fromGeneric));
@@ -133,6 +180,7 @@ api.patch('/me', wrap(async (req, res) => {
 }));
 
 api.get('/calls', wrap(async (req, res) => {
+  if (Date.now() - lastSync > 20000) await Promise.race([syncTelnyx(), new Promise((r) => setTimeout(r, 8000))]);
   res.json(await all(
     `SELECT id, caller_name, caller_number, started_at, duration_sec, summary, next_action, request_type, urgency, status,
             callback_before, address, diagnostics, is_spam
@@ -263,9 +311,10 @@ admin.patch('/clients/:id', wrap(async (req, res) => {
   if (num && num !== cur.agent_number && (await one('SELECT 1 FROM clients WHERE agent_number = $1', [num]))) return res.status(409).json({ error: 'Ce numéro est déjà attribué' });
   const token = b.new_link ? crypto.randomBytes(18).toString('base64url') : cur.token;
   const row = await one(
-    `UPDATE clients SET name = $2, email = $3, agent_number = $4, active = $5, token = $6, trade = $7 WHERE id = $1 RETURNING *`,
+    `UPDATE clients SET name = $2, email = $3, agent_number = $4, active = $5, token = $6, trade = $7, telnyx_assistant_id = $8 WHERE id = $1 RETURNING *`,
     [cur.id, b.name?.trim() || cur.name, b.email !== undefined ? b.email?.trim() || null : cur.email, num,
-      b.active !== undefined ? !!b.active : cur.active, token, b.trade?.trim() || cur.trade]);
+      b.active !== undefined ? !!b.active : cur.active, token, b.trade?.trim() || cur.trade,
+      b.telnyx_assistant_id !== undefined ? String(b.telnyx_assistant_id || '').trim() || null : cur.telnyx_assistant_id]);
   res.json(row);
 }));
 // Appel de test, pour vérifier le circuit sans téléphone
@@ -286,6 +335,7 @@ admin.post('/clients/:id/test-call', wrap(async (req, res) => {
   const sent = await sendCallEmail(c, call);
   res.json({ call, email_sent: sent });
 }));
+admin.post('/telnyx/sync', wrap(async (req, res) => res.json(await syncTelnyx())));
 app.use('/admin/api', admin);
 
 app.get('/health', (req, res) => res.json({ ok: true }));
@@ -299,3 +349,5 @@ app.use((err, req, res, next) => {
 
 await migrate();
 app.listen(PORT, () => console.log(`Diago prêt sur le port ${PORT}`));
+const POLL = Math.max(30, Number(process.env.TELNYX_POLL_SECONDS) || 60) * 1000;
+if (process.env.TELNYX_API_KEY) { setTimeout(syncTelnyx, 5000); setInterval(syncTelnyx, POLL).unref(); }

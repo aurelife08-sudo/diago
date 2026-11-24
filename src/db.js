@@ -66,6 +66,7 @@ export async function migrate() {
       email_sent       BOOLEAN NOT NULL DEFAULT FALSE,
       created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS telnyx_assistant_id TEXT;
     CREATE INDEX IF NOT EXISTS calls_client_idx ON calls (client_id, started_at DESC);
 
     CREATE TABLE IF NOT EXISTS appointments (

@@ -102,12 +102,14 @@
       <article class="card cl ${c.active ? '' : 'off'}" data-id="${c.id}">
         <div class="row"><span class="name">${esc(c.name)}</span><span class="when">${c.calls} appel${c.calls > 1 ? 's' : ''}</span></div>
         <div class="meta">Agent : ${esc(fmt(c.agent_number))} · ${esc(c.email || 'pas d\'email')}</div>
+        <div class="meta">Assistant Telnyx : ${esc(c.telnyx_assistant_id || 'non relié')}</div>
         <div class="meta">${esc(c.home_address || 'Adresse du cabinet non renseignée')}${c.last_call ? ` · dernier appel le ${new Date(c.last_call).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' })}` : ''}</div>
         <div class="actions">
           <button class="btn primary sm" data-a="copy">Copier son lien</button>
           <a class="btn sm" href="${esc(link(c))}" target="_blank" rel="noopener">Ouvrir</a>
           <button class="btn sm" data-a="test">Appel de test</button>
           <button class="btn sm" data-a="num">Changer le numéro</button>
+          <button class="btn sm" data-a="telnyx">Relier l'assistant Telnyx</button>
           <button class="btn sm" data-a="relink">Nouveau lien</button>
           <button class="btn sm ${c.active ? 'danger' : ''}" data-a="toggle">${c.active ? 'Désactiver' : 'Réactiver'}</button>
         </div>
@@ -142,6 +144,13 @@
         field.innerHTML = `<input class="search" style="flex:1;border:0;padding:0 14px" value="${esc(c.agent_number || '')}" placeholder="+33 4 50 00 00 00" /><button class="btn sm primary">OK</button>`;
         b.closest('.cl').append(field);
         field.querySelector('button').onclick = async () => { try { await api(`/clients/${c.id}`, { method: 'PATCH', body: { agent_number: field.querySelector('input').value } }); toast('Numéro enregistré'); load(); } catch (err) { toast(err.message); } };
+      }
+      if (b.dataset.a === 'telnyx') {
+        const field = document.createElement('div');
+        field.className = 'inline'; field.style.marginTop = '10px';
+        field.innerHTML = `<input class="search" style="flex:1;border:0;padding:0 14px" value="${esc(c.telnyx_assistant_id || '')}" placeholder="assistant-1a75adc4-…" /><button class="btn sm primary">OK</button>`;
+        b.closest('.cl').append(field);
+        field.querySelector('button').onclick = async () => { try { await api(`/clients/${c.id}`, { method: 'PATCH', body: { telnyx_assistant_id: field.querySelector('input').value } }); const r = await api('/telnyx/sync', { method: 'POST' }); toast(`Assistant relié${r.added ? ` · ${r.added} appel(s) récupéré(s)` : ''}`); load(); } catch (err) { toast(err.message); } };
       }
       if (b.dataset.a === 'relink') {
         if (!b.dataset.sure) { b.dataset.sure = 1; b.textContent = "Confirmer (l'ancien lien ne marchera plus)"; return; }
