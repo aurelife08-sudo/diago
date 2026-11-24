@@ -24,3 +24,7 @@ services:
         sync: false
       - key: RESEND_API_KEY
         sync: false
+      - key: TELNYX_API_KEY
+        sync: false
+      - key: TELNYX_PUBLIC_KEY
+        sync: false

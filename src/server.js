@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { q, one, all, migrate } from './db.js';
 import { fromVapi, fromRetell, fromGeneric, normNumber } from './providers.js';
+import { fromTelnyx } from './telnyx.js';
 import { classify } from './ai.js';
 import { sendCallEmail } from './email.js';
 import { geocode, planDay } from './geo.js';
@@ -12,11 +13,12 @@ import { geocode, planDay } from './geo.js';
 const PORT = process.env.PORT || 3000;
 const ADMIN_KEY = process.env.ADMIN_KEY || '';
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || '';
+const TELNYX_PUBLIC_KEY = process.env.TELNYX_PUBLIC_KEY || '';
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 const app = express();
 app.disable('x-powered-by');
-app.use(express.json({ limit: '2mb' }));
+app.use(express.json({ limit: '2mb', verify: (req, res, buf) => { if (req.url.startsWith('/webhooks/')) req.rawBody = buf; } }));
 app.use((req, res, next) => { res.set('X-Content-Type-Options', 'nosniff'); next(); });
 app.use(express.static(path.join(ROOT, 'public'), { extensions: ['html'], maxAge: '5m' }));
 
@@ -39,7 +41,20 @@ function requireAdmin(req, res, next) {
   if (!ADMIN_KEY || !safeEq(req.get('x-admin-key') || '', ADMIN_KEY)) return res.status(401).json({ error: 'Clé admin invalide' });
   next();
 }
+// Signature Ed25519 de Telnyx (clé publique du portail : Account → Keys & Credentials → Public Key)
+function telnyxSignatureOk(req) {
+  if (!TELNYX_PUBLIC_KEY || !req.rawBody) return false;
+  const sig = req.get('telnyx-signature-ed25519');
+  const ts = req.get('telnyx-timestamp');
+  if (!sig || !ts || Math.abs(Date.now() / 1000 - Number(ts)) > 300) return false;
+  try {
+    const raw = Buffer.from(TELNYX_PUBLIC_KEY, 'base64');
+    const key = crypto.createPublicKey({ key: Buffer.concat([Buffer.from('302a300506032b6570032100', 'hex'), raw]), format: 'der', type: 'spki' });
+    return crypto.verify(null, Buffer.concat([Buffer.from(`${ts}|`), req.rawBody]), key, Buffer.from(sig, 'base64'));
+  } catch { return false; }
+}
 function webhookOk(req) {
+  if (telnyxSignatureOk(req)) return true;
   if (!WEBHOOK_SECRET) return true;
   const given = req.get('x-webhook-secret') || req.get('x-vapi-secret') || req.query.secret || '';
   return safeEq(given, WEBHOOK_SECRET);
@@ -50,19 +65,25 @@ function webhookOk(req) {
 function ingest(parse) {
   return wrap(async (req, res) => {
     if (!webhookOk(req)) return res.status(401).json({ error: 'Secret invalide' });
-    const evt = parse(req.body);
+    const evt = await parse(req.body);
     if (!evt) return res.json({ ignored: true });
 
     const to = normNumber(evt.toNumber);
+    // Un 2e événement du même appel (ex. Telnyx call.analyzed, numéros masqués) retrouve son cabinet par l'appel déjà reçu
+    const known = evt.providerCallId ? await one('SELECT client_id FROM calls WHERE provider_call_id = $1', [evt.providerCallId]) : null;
     const client = (to && (await one('SELECT * FROM clients WHERE agent_number = $1 AND active', [to])))
-      || (req.query.client && (await one('SELECT * FROM clients WHERE token = $1 AND active', [req.query.client])));
+      || (req.query.client && (await one('SELECT * FROM clients WHERE token = $1 AND active', [req.query.client])))
+      || (known && (await one('SELECT * FROM clients WHERE id = $1 AND active', [known.client_id])));
     if (!client) {
       console.warn('[webhook] aucun cabinet pour le numéro', evt.toNumber);
       return res.status(404).json({ error: 'Aucun cabinet pour ce numéro' });
     }
     if (evt.providerCallId) {
-      const prev = await one('SELECT id, transcript FROM calls WHERE provider_call_id = $1', [evt.providerCallId]);
-      if (prev && (prev.transcript || '').length >= (evt.transcript || '').length) return res.json({ duplicate: true, id: prev.id });
+      const prev = await one('SELECT id, transcript, recording_url FROM calls WHERE provider_call_id = $1', [evt.providerCallId]);
+      if (prev && (prev.transcript || '').length >= (evt.transcript || '').length) {
+        if (evt.recordingUrl && !prev.recording_url) await q('UPDATE calls SET recording_url = $2 WHERE id = $1', [prev.id, evt.recordingUrl]);
+        return res.json({ duplicate: true, id: prev.id });
+      }
       if (prev) await q('DELETE FROM calls WHERE id = $1', [prev.id]); // version plus complète du même appel
     }
     res.json({ ok: true }); // on répond vite à la plateforme, le tri se fait ensuite
@@ -88,6 +109,7 @@ function ingest(parse) {
 app.post('/webhooks/vapi', ingest(fromVapi));
 app.post('/webhooks/retell', ingest(fromRetell));
 app.post('/webhooks/generic', ingest(fromGeneric));
+app.post('/webhooks/telnyx', ingest(fromTelnyx));
 
 // ---------- API de l'app ----------
 const api = express.Router();

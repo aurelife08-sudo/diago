@@ -7,6 +7,7 @@ Agent téléphonique IA + appli pour cabinets (appels résumés et triés, tourn
 - `src/server.js` : le serveur (webhooks de l'agent vocal, API de l'app, admin).
 - `src/ai.js` : l'agent n°2 qui lit la transcription et range l'appel (Claude). Sans clé, des règles simples prennent le relais.
 - `src/geo.js` : adresses → coordonnées (Géoplateforme IGN), temps de route réels (OSRM) et ordre de tournée optimal avec créneaux.
+- `src/telnyx.js` : branchement de l'agent Telnyx (`/webhooks/telnyx`), voir `docs/agent-telnyx.md`.
 - `src/email.js` : email de résumé après chaque appel (Resend).
 - `public/` : l'app (`/`), la page admin (`/admin`).
 
@@ -21,6 +22,8 @@ Agent téléphonique IA + appli pour cabinets (appels résumés et triés, tourn
 | `ANTHROPIC_API_KEY` | conseillé | Résumés et tri par l'IA |
 | `AI_MODEL` | non | Modèle Claude (par défaut `claude-haiku-5-5`) |
 | `RESEND_API_KEY` | conseillé | Envoi des emails |
+| `TELNYX_API_KEY` | pour Telnyx | Récupère la conversation dans l'API Telnyx quand le webhook ne la contient pas |
+| `TELNYX_PUBLIC_KEY` | pour Telnyx | Vérifie la signature Ed25519 des webhooks Telnyx |
 | `EMAIL_FROM` | non | Expéditeur, ex. `Diago <appels@votre-domaine.fr>` (domaine vérifié dans Resend) |
 | `OSRM_URL` | non | Serveur de calcul d'itinéraire (par défaut le serveur public OSRM) |
 
