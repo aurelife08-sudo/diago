@@ -124,6 +124,10 @@
       return true;
     });
   }
+  function rdvLabel(day, start) {
+    const d = new Date(`${day}T12:00:00Z`).toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
+    return start != null ? `${d} · ${Math.floor(start / 60)}h${String(start % 60).padStart(2, '0')}` : d;
+  }
   function renderCalls() {
     const list = visibleCalls(), el = $('#callList');
     if (!list.length) {
@@ -132,7 +136,7 @@
     }
     el.innerHTML = list.map((c) => `
       <article class="card item ${c.status === 'termine' ? 'dim' : ''}" data-id="${c.id}" tabindex="0">
-        <div class="row"><span class="dot ${c.urgency}" title="${URG[c.urgency]}"></span><span class="name">${esc(c.caller_name || fmtPhone(c.caller_number))}</span><span class="when">${timeAgo(c.started_at)}</span></div>
+        <div class="row"><span class="dot ${c.urgency}" title="${URG[c.urgency]}"></span><span class="name">${esc(c.caller_name || fmtPhone(c.caller_number))}</span>${c.appt_day ? `<span class="rdv">${ic('cal')}${rdvLabel(c.appt_day, c.appt_start)}</span>` : ''}<span class="when">${timeAgo(c.started_at)}</span></div>
         <p class="sum">${esc(c.summary)}</p>
         <div class="tags">
           ${c.urgency === 'haute' ? '<span class="tag red">Urgent</span>' : ''}

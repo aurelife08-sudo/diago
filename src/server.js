@@ -208,12 +208,14 @@ api.patch('/me', wrap(async (req, res) => {
 api.get('/calls', wrap(async (req, res) => {
   if (Date.now() - lastSync > 20000) await Promise.race([syncTelnyx(), new Promise((r) => setTimeout(r, 8000))]);
   res.json(await all(
-    `SELECT id, caller_name, caller_number, started_at, duration_sec, summary, next_action, request_type, urgency, status,
-            callback_before, address, diagnostics, is_spam
-       FROM calls WHERE client_id = $1 AND NOT is_spam
-      ORDER BY (status = 'a_rappeler') DESC,
-               CASE urgency WHEN 'haute' THEN 0 WHEN 'moyenne' THEN 1 ELSE 2 END,
-               started_at DESC
+    `SELECT c.id, c.caller_name, c.caller_number, c.started_at, c.duration_sec, c.summary, c.next_action, c.request_type, c.urgency, c.status,
+            c.callback_before, c.address, c.diagnostics, c.is_spam, r.day AS appt_day, r.win_start AS appt_start
+       FROM calls c
+       LEFT JOIN LATERAL (SELECT day, win_start FROM appointments a WHERE a.call_id = c.id ORDER BY day, win_start NULLS LAST LIMIT 1) r ON TRUE
+      WHERE c.client_id = $1 AND NOT c.is_spam
+      ORDER BY (c.status = 'a_rappeler') DESC,
+               CASE c.urgency WHEN 'haute' THEN 0 WHEN 'moyenne' THEN 1 ELSE 2 END,
+               c.started_at DESC
       LIMIT 300`, [req.client.id]));
 }));
 api.get('/calls/:id', wrap(async (req, res) => {
