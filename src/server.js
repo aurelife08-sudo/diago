@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { q, one, all, migrate } from './db.js';
 import { fromVapi, fromRetell, fromGeneric, normNumber } from './providers.js';
 import { fromTelnyx, listFinishedConversations } from './telnyx.js';
+import { findSlots, bookSlot, linkAgentAppointments } from './booking.js';
 import { classify } from './ai.js';
 import { sendCallEmail } from './email.js';
 import { geocode, planDay } from './geo.js';
@@ -99,6 +100,7 @@ async function storeCall(evt, client) {
       evt.transcript, evt.recordingUrl, ai.summary, ai.next_action, ai.request_type, ai.urgency, ai.callback_before,
       ai.address, ai.diagnostics, ai.is_spam, ai.is_spam ? 'termine' : 'a_rappeler'],
   );
+  if (call) { try { if (await linkAgentAppointments(client.id, call)) call.status = 'rdv_pris'; } catch (err) { console.warn('[rdv] liaison impossible :', err.message); } }
   if (call && !call.is_spam && (await sendCallEmail(client, call))) await q('UPDATE calls SET email_sent = TRUE WHERE id = $1', [call.id]);
   console.log(`[appel] ${call?.id ?? '(doublon)'} rangé pour ${client.name} (${ai.urgency})`);
   return call;
@@ -121,6 +123,30 @@ function ingest(parse) {
     try { await storeCall(evt, client); } catch (err) { console.error('[webhook] erreur de traitement :', err); }
   });
 }
+
+// ---------- Outils de l'agent (prise de rendez-vous) ----------
+// URL : /tools/telnyx/creneaux?client=JETON_DU_CABINET&secret=WEBHOOK_SECRET
+async function toolClient(req, res) {
+  if (!webhookOk(req)) { res.status(401).json({ erreur: 'Secret invalide' }); return null; }
+  const token = req.query.client || req.get('x-diago-client');
+  const client = token && (await one('SELECT * FROM clients WHERE token = $1 AND active', [token]));
+  if (!client) { res.status(404).json({ erreur: 'Cabinet inconnu' }); return null; }
+  return client;
+}
+const toolArgs = (req) => {
+  const b = req.body && typeof req.body === 'object' ? req.body : {};
+  return { ...req.query, ...(b.arguments && typeof b.arguments === 'object' ? b.arguments : b) };
+};
+app.all('/tools/telnyx/creneaux', wrap(async (req, res) => {
+  const client = await toolClient(req, res); if (!client) return;
+  const r = await findSlots(client, toolArgs(req));
+  res.json(r.creneaux.length ? { ...r, consigne: 'Propose deux de ces créneaux au client, en lisant le champ texte.' }
+    : { ...r, consigne: 'Aucun créneau libre : dis que le diagnostiqueur rappellera pour fixer la date.' });
+}));
+app.all('/tools/telnyx/reserver', wrap(async (req, res) => {
+  const client = await toolClient(req, res); if (!client) return;
+  res.json(await bookSlot(client, toolArgs(req)));
+}));
 
 // Telnyx : Diago va aussi chercher lui-même les appels terminés (au cas où un webhook n'arrive pas).
 let lastSync = 0, syncing = null;
