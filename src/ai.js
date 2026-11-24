@@ -9,6 +9,7 @@ const SYSTEM = `Tu ranges les appels reçus par l'agent téléphonique d'un prof
 Lis la transcription et réponds UNIQUEMENT avec un objet JSON, sans texte autour :
 {
  "caller_name": "nom de l'appelant tel qu'il l'a dit, sinon null",
+ "callback_number": "numéro de rappel donné à l'oral, en chiffres (ex: 0637123456), sinon null",
  "summary": "résumé en 1 ou 2 phrases, en français, ce que veut la personne",
  "next_action": "ce que le professionnel doit faire, en une phrase à l'impératif",
  "request_type": "devis | rendez_vous | urgence | information | suivi | autre",
@@ -20,6 +21,8 @@ Lis la transcription et réponds UNIQUEMENT avec un objet JSON, sans texte autou
 }
 Urgence haute : vente/signature/location imminente (sous une semaine), problème bloquant, client très pressé. Basse : simple question sans délai.
 is_spam vaut true pour démarchage commercial, robot ou erreur de numéro.`;
+
+if (!KEY) console.warn('[ai] ANTHROPIC_API_KEY absente : tri par règles simples (résumés moins bons).');
 
 export async function classify(evt) {
   const text = (evt.transcript || '').trim();
@@ -52,6 +55,7 @@ function clean(j, evt) {
   const diag = Array.isArray(j.diagnostics) ? j.diagnostics.filter(Boolean).map(String).slice(0, 10) : [];
   return {
     caller_name: j.caller_name || evt.callerName || null,
+    callback_number: phoneFrom(j.callback_number) || spokenNumber(evt.transcript),
     summary: String(j.summary || evt.providerSummary || 'Appel reçu.').slice(0, 600),
     next_action: String(j.next_action || 'Rappeler le client.').slice(0, 300),
     request_type: TYPES.includes(j.request_type) ? j.request_type : 'autre',
@@ -78,8 +82,10 @@ function rules(evt) {
   const diagnostics = [...new Set(Object.entries(DIAGS).filter(([k]) => t.includes(k)).map(([, v]) => v))].join(', ') || null;
   const userLines = (evt.transcript || '').split('\n').filter((l) => /^\s*(user|client|caller)\s*:/i.test(l)).map((l) => l.replace(/^[^:]+:\s*/, ''));
   const summary = evt.providerSummary || (userLines.join(' ').slice(0, 220) || 'Appel reçu, pas de transcription.');
+  const name = /(?:c'est|je suis|je m'appelle|ici)\s+((?:madame|monsieur|mme|m\.)\s+[A-Za-zÀ-ÿ'-]+|[A-ZÀ-Ý][a-zà-ÿ'-]+(?:\s+[A-ZÀ-Ý][a-zà-ÿ'-]+)?)/i.exec(userLines.join(' '));
   return {
-    caller_name: evt.callerName || null,
+    caller_name: evt.callerName || (name ? name[1].replace(/^(\w)/, (c) => c.toUpperCase()) : null),
+    callback_number: spokenNumber(evt.transcript),
     summary,
     next_action: type === 'devis' ? 'Envoyer un devis.' : type === 'rendez_vous' ? 'Rappeler pour fixer le rendez-vous.' : 'Rappeler le client.',
     request_type: type,
@@ -89,4 +95,52 @@ function rules(evt) {
     diagnostics,
     is_spam: false,
   };
+}
+
+// ---------- Numéro de rappel dit à l'oral ----------
+function phoneFrom(v) {
+  const d = String(v || '').replace(/\D/g, '');
+  if (/^0[1-9]\d{8}$/.test(d)) return d;
+  if (/^33[1-9]\d{8}$/.test(d)) return '0' + d.slice(2);
+  return null;
+}
+
+const UNITS = { zéro: 0, zero: 0, un: 1, une: 1, deux: 2, trois: 3, quatre: 4, cinq: 5, six: 6, sept: 7, huit: 8, neuf: 9, dix: 10, onze: 11, douze: 12, treize: 13, quatorze: 14, quinze: 15, seize: 16 };
+const TENS = { vingt: 20, vingts: 20, trente: 30, quarante: 40, cinquante: 50, soixante: 60 };
+
+/** « zéro six trente-sept 12 quatre-vingt-dix-neuf … » → 06371299… (cherche un numéro français dans ce qu'a dit l'appelant). */
+export function spokenNumber(transcript) {
+  const said = String(transcript || '').split('\n').filter((l) => /^\s*(user|client|caller)\s*:/i.test(l)).map((l) => l.replace(/^[^:]+:\s*/, '')).join(' ');
+  const direct = /(?:\+33\s?|0)[1-9](?:[\s.-]?\d{2}){4}/.exec(said);
+  if (direct) return phoneFrom(direct[0]);
+  const words = said.toLowerCase().replace(/[-,.]/g, ' ').split(/\s+/).filter(Boolean);
+  let out = '';
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i];
+    if (/^\d+$/.test(w)) { out += w; continue; }
+    if (w === 'quatre' && /^vingts?$/.test(words[i + 1] || '')) {
+      let v = 80; i++;
+      const n = words[i + 1];
+      if (n in UNITS && UNITS[n] <= 16) { v += UNITS[n]; i++; if (n === 'dix' && words[i + 1] in UNITS && UNITS[words[i + 1]] < 10) { v += UNITS[words[i + 1]]; i++; } }
+      out += String(v).padStart(2, '0'); continue;
+    }
+    if (w in TENS) {
+      let v = TENS[w];
+      let n = words[i + 1];
+      if (n === 'et') { i++; n = words[i + 1]; }
+      if (n in UNITS && (v === 60 ? UNITS[n] <= 16 : UNITS[n] < 10)) { v += UNITS[n]; i++; if (v === 70 && words[i + 1] in UNITS && UNITS[words[i + 1]] < 10) { v += UNITS[words[i + 1]]; i++; } }
+      out += String(v).padStart(2, '0'); continue;
+    }
+    if (w in UNITS) {
+      const v = UNITS[w];
+      const n = words[i + 1];
+      if (v === 10 && n in UNITS && UNITS[n] >= 7 && UNITS[n] <= 9) { out += String(10 + UNITS[n]); i++; continue; }
+      out += v >= 10 ? String(v) : String(v);
+      continue;
+    }
+    if (out.length >= 10) break;
+    if (!['le', 'au', 'mon', 'numéro', 'c\'est', 'est', 'sur', 'à', 'joindre', 'rappeler', 'me', 'pouvez', 'vous'].includes(w)) out = out.length >= 10 ? out : '';
+  }
+  const m = /0[1-9]\d{8}/.exec(out);
+  return m ? m[0] : null;
 }

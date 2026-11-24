@@ -95,7 +95,7 @@ async function storeCall(evt, client) {
        transcript, recording_url, summary, next_action, request_type, urgency, callback_before, address, diagnostics, is_spam, status)
      VALUES ($1,$2,$3,$4,$5,COALESCE($6::timestamptz, NOW()),$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
      ON CONFLICT (provider_call_id) DO NOTHING RETURNING *`,
-    [client.id, evt.provider, evt.providerCallId, ai.caller_name, normNumber(evt.fromNumber), evt.startedAt, evt.durationSec,
+    [client.id, evt.provider, evt.providerCallId, ai.caller_name, normNumber(evt.fromNumber) || normNumber(ai.callback_number), evt.startedAt, evt.durationSec,
       evt.transcript, evt.recordingUrl, ai.summary, ai.next_action, ai.request_type, ai.urgency, ai.callback_before,
       ai.address, ai.diagnostics, ai.is_spam, ai.is_spam ? 'termine' : 'a_rappeler'],
   );
