@@ -24,28 +24,36 @@ is_spam vaut true pour démarchage commercial, robot ou erreur de numéro.`;
 
 if (!KEY) console.warn('[ai] ANTHROPIC_API_KEY absente : tri par règles simples (résumés moins bons).');
 
+async function askClaude(evt, text) {
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'x-api-key': KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: MODEL,
+      max_tokens: 1500,
+      system: SYSTEM,
+      messages: [{ role: 'user', content: `Numéro appelant : ${evt.fromNumber || 'inconnu'}\nRésumé fourni par la plateforme (souvent en anglais, à ne pas recopier) : ${evt.providerSummary || 'aucun'}\n\nTranscription :\n${text.slice(0, 12000)}` }],
+    }),
+    signal: AbortSignal.timeout(30000),
+  });
+  const body = await res.text();
+  if (!res.ok) throw new Error(`HTTP ${res.status} ${body.slice(0, 300)}`);
+  const data = JSON.parse(body);
+  const raw = (data.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('').replace(/```(?:json)?/g, '');
+  const start = raw.indexOf('{'), end = raw.lastIndexOf('}');
+  if (start < 0 || end <= start) throw new Error(`réponse sans JSON (stop_reason=${data.stop_reason}) : ${raw.slice(0, 200) || '(vide)'}`);
+  return JSON.parse(raw.slice(start, end + 1));
+}
+
 export async function classify(evt) {
   const text = (evt.transcript || '').trim();
   if (KEY && text) {
-    try {
-      const res = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: { 'x-api-key': KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-        body: JSON.stringify({
-          model: MODEL,
-          max_tokens: 600,
-          system: SYSTEM,
-          messages: [{ role: 'user', content: `Numéro appelant : ${evt.fromNumber || 'inconnu'}\nRésumé fourni par la plateforme : ${evt.providerSummary || 'aucun'}\n\nTranscription :\n${text.slice(0, 12000)}` }],
-        }),
-        signal: AbortSignal.timeout(25000),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status} ${await res.text()}`);
-      const data = await res.json();
-      const raw = data.content?.map((c) => c.text || '').join('') || '';
-      const json = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1));
-      return clean(json, evt);
-    } catch (err) {
-      console.warn('[ai] tri IA impossible, règles simples utilisées :', err.message);
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        return clean(await askClaude(evt, text), evt);
+      } catch (err) {
+        console.warn(`[ai] tri IA impossible (essai ${attempt}/2) :`, err.message);
+      }
     }
   }
   return rules(evt);
@@ -81,8 +89,9 @@ function rules(evt) {
   const DIAGS = { dpe: 'DPE', amiante: 'Amiante', plomb: 'Plomb', 'électricité': 'Électricité', electricite: 'Électricité', gaz: 'Gaz', termite: 'Termites', carrez: 'Carrez', boutin: 'Boutin' };
   const diagnostics = [...new Set(Object.entries(DIAGS).filter(([k]) => t.includes(k)).map(([, v]) => v))].join(', ') || null;
   const userLines = (evt.transcript || '').split('\n').filter((l) => /^\s*(user|client|caller)\s*:/i.test(l)).map((l) => l.replace(/^[^:]+:\s*/, ''));
-  const summary = evt.providerSummary || (userLines.join(' ').slice(0, 220) || 'Appel reçu, pas de transcription.');
-  const name = /(?:c'est|je suis|je m'appelle|ici)\s+((?:madame|monsieur|mme|m\.)\s+[A-Za-zÀ-ÿ'-]+|[A-ZÀ-Ý][a-zà-ÿ'-]+(?:\s+[A-ZÀ-Ý][a-zà-ÿ'-]+)?)/i.exec(userLines.join(' '));
+  const said = userLines.join(' ').replace(/\s+/g, ' ').trim();
+  const summary = said ? `L'appelant a dit : « ${said.slice(0, 260)}${said.length > 260 ? '…' : ''} »` : 'Appel reçu, pas de transcription.';
+  const name = /(?:[Cc]'est|[Jj]e suis|[Jj]e m'appelle|[Ii]ci)\s+((?:[Mm]adame|[Mm]onsieur|Mme|M\.)\s+[A-ZÀ-Ý][A-Za-zÀ-ÿ'-]+|[A-ZÀ-Ý][a-zà-ÿ'-]+\s+[A-ZÀ-Ý][a-zà-ÿ'-]+)/.exec(said);
   return {
     caller_name: evt.callerName || (name ? name[1].replace(/^(\w)/, (c) => c.toUpperCase()) : null),
     callback_number: spokenNumber(evt.transcript),
