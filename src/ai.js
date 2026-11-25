@@ -20,7 +20,7 @@ Lis la transcription et réponds UNIQUEMENT avec un objet JSON, sans texte autou
  "email": "adresse email donnée à l'oral, reconstituée (arobase → @, point → ., tiret → -), en minuscules, sinon null",
  "property_type": "appartement | maison | local | autre, sinon null",
  "surface_m2": "surface du bien en m² (nombre), sinon null",
- "build_year": "année de construction approximative (nombre) : avant 1949 → 1940, années 70 → 1975, après 2000 → 2005 ; sinon null",
+ "build_year": "année de construction (nombre) : l'année exacte si elle est dite ; sinon une estimation (avant 1949 → 1940, années 70 → 1975, après 2000 → 2005) ; sinon null",
  "transaction": "vente | location | travaux | autre, sinon null",
  "is_spam": false
 }
