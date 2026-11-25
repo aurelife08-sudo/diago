@@ -75,7 +75,14 @@ export async function sendQuoteEmail(client, quote, settings) {
       }),
       signal: AbortSignal.timeout(15000),
     });
-    if (!res.ok) throw new Error(`HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
+    if (!res.ok) {
+      const t = await res.text();
+      if (res.status === 403 && /verify a domain|testing emails/i.test(t)) {
+        console.warn('[email devis] domaine d\'envoi non vérifié dans Resend');
+        return { ok: false, error: "Envoi par email pas encore activé (domaine d'envoi à vérifier dans Resend)" };
+      }
+      throw new Error(`HTTP ${res.status} ${t.slice(0, 200)}`);
+    }
     return { ok: true };
   } catch (err) {
     console.warn('[email devis] échec :', err.message);

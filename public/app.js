@@ -707,11 +707,14 @@
         <div class="card group"><label class="field"><span>Note sur le devis (visible par le client)</span><textarea name="notes" placeholder="Ex. : accès par le garage, clés chez le voisin…">${esc(d.notes || '')}</textarea></label></div>
         <div id="qAlt"></div>
         ${qt ? `<div class="two"><a class="btn" href="/api/quotes/${d.id}/apercu?t=${encodeURIComponent(token)}" target="_blank" rel="noopener">${ic('eye')}Aperçu</a>${d.call_id ? `<button type="button" class="btn" id="qCall">${ic('phone')}Voir l'appel</button>` : '<span></span>'}</div>` : ''}
-        ${qt && d.status !== 'a_valider' ? `<div class="seg" id="qStatus">${['envoye', 'accepte', 'refuse'].map((k) => `<button type="button" data-st="${k}" class="${d.status === k ? 'on' : ''}">${QST[k]}</button>`).join('')}</div>` : ''}
+        ${qt && d.status === 'envoye' ? `<div class="section-t" style="margin:4px 6px 0">Réponse du client</div>
+          <div class="two"><button type="button" class="btn primary" data-st="accepte">${ic('check')}Accepté</button><button type="button" class="btn danger" data-st="refuse">${ic('x')}Refusé</button></div>` : ''}
+        ${qt && (d.status === 'accepte' || d.status === 'refuse') ? `<div class="banner ${d.status === 'refuse' ? 'bad' : ''}" style="margin:0">Devis ${QST[d.status].toLowerCase()}${d.accepted_at && d.status === 'accepte' ? ` le ${new Date(d.accepted_at).toLocaleDateString('fr-FR')}` : ''}. <button type="button" class="link" data-st="envoye">Annuler</button></div>` : ''}
         <div class="sh-foot">
-          ${qt ? '<button type="button" class="btn danger" id="qDel">Supprimer</button>' : ''}
+          <button type="button" class="btn primary" id="qSend">${ic('send')}${d.status === 'a_valider' ? 'Valider et envoyer' : 'Renvoyer le devis'}</button>
           <button type="submit" class="btn">Enregistrer</button>
-          <button type="button" class="btn primary" id="qSend">${ic('send')}${d.status === 'a_valider' ? 'Valider et envoyer' : 'Renvoyer'}</button>
+          ${qt && d.status === 'a_valider' ? `<button type="button" class="btn" data-st="refuse">${ic('x')}Refuser</button>` : ''}
+          ${qt ? '<button type="button" class="btn danger" id="qDel">Supprimer</button>' : ''}
         </div>
       </form>`);
     const f = $('#qForm');
@@ -783,22 +786,29 @@
       closeSheet(); renderQuotes(); loadQuotes({ silent: true }).catch(() => {}); toast('Devis supprimé');
     });
     $('#qCall')?.addEventListener('click', () => { show('calls'); openCall(d.call_id).catch((err) => toast(err.message)); });
-    $('#qStatus')?.addEventListener('click', async (e) => {
+    // Décision : le devis se range tout seul dans la bonne case
+    const classify = async (st) => {
+      if (st !== 'envoye' || saved.status !== 'a_valider') saved = await api(`/quotes/${saved.id}`, { method: 'PATCH', body: { status: st } });
+      state.qfilter = saved.status;
+      closeSheet(); await loadQuotes({ silent: true }).catch(() => {});
+      toast(`Classé dans « ${{ a_valider: 'À valider', envoye: 'Envoyés', accepte: 'Acceptés', refuse: 'Refusés' }[saved.status]} »`);
+    };
+    f.addEventListener('click', async (e) => {
       const b = e.target.closest('[data-st]'); if (!b) return;
-      saved = await api(`/quotes/${saved.id}`, { method: 'PATCH', body: { status: b.dataset.st } });
-      $$('#qStatus button').forEach((x) => x.classList.toggle('on', x === b));
-      $('#shMeta').textContent = `${saved.number} · ${QST[saved.status]}`;
-      loadQuotes({ silent: true }).catch(() => {}); toast(`Devis marqué « ${QST[saved.status]} »`);
+      b.disabled = true;
+      try { if (b.dataset.st === 'refuse' && saved.status === 'a_valider') await save(); await classify(b.dataset.st); } catch (err) { toast(err.message); b.disabled = false; }
     });
     const publicLink = () => `${location.origin}/d/${saved.token}`;
-    const markSent = async () => { if (saved.status === 'a_valider') saved = await api(`/quotes/${saved.id}`, { method: 'PATCH', body: { status: 'envoye' } }); loadQuotes({ silent: true }).catch(() => {}); };
+    const markSent = async () => { if (saved.status === 'a_valider') saved = await api(`/quotes/${saved.id}`, { method: 'PATCH', body: { status: 'envoye' } }); state.qfilter = 'envoye'; loadQuotes({ silent: true }).catch(() => {}); };
     const showAlt = (why) => {
       const phone = saved.customer_phone || '';
       $('#qAlt').innerHTML = `<div class="alt"><p>${esc(why)}</p><div class="actions">
           ${phone ? `<a class="btn sm" id="qSms" href="sms:${esc(phone)}?&body=${encodeURIComponent(`Bonjour, voici votre devis ${saved.number} : ${publicLink()}`)}">${ic('sms')}Envoyer par SMS</a>` : ''}
-          <button type="button" class="btn sm" id="qCopy">${ic('link')}Copier le lien du devis</button></div></div>`;
+          <button type="button" class="btn sm" id="qCopy">${ic('link')}Copier le lien du devis</button>
+          <button type="button" class="btn sm" id="qMark">${ic('check')}Déjà envoyé</button></div></div>`;
       $('#qAlt').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       $('#qSms')?.addEventListener('click', () => { markSent().catch(() => {}); });
+      $('#qMark').addEventListener('click', async () => { await markSent().catch(() => {}); closeSheet(); toast('Classé dans « Envoyés »'); });
       $('#qCopy').addEventListener('click', async () => {
         await markSent().catch(() => {});
         try { await navigator.clipboard.writeText(publicLink()); toast('Lien copié : devis marqué envoyé'); } catch { toast(publicLink()); }
@@ -811,7 +821,8 @@
         await save();
         if (!saved.customer_email) { showAlt("Pas d'email pour ce client : envoyez le lien autrement."); return; }
         saved = await api(`/quotes/${saved.id}/send`, { method: 'POST' });
-        closeSheet(); loadQuotes({ silent: true }).catch(() => {}); toast(`Devis envoyé à ${saved.customer_email}`);
+        state.qfilter = saved.status;
+        closeSheet(); loadQuotes({ silent: true }).catch(() => {}); toast(`Devis envoyé à ${saved.customer_email} · classé dans « Envoyés »`);
       } catch (err) { if (saved) showAlt(`${err.message}. Vous pouvez l'envoyer autrement :`); else toast(err.message); }
       finally { b.disabled = false; }
     });

@@ -366,8 +366,8 @@ api.patch('/quotes/:id', wrap(async (req, res) => {
     if (!['a_valider', 'envoye', 'accepte', 'refuse'].includes(st)) return res.status(400).json({ error: 'Statut invalide' });
     return res.json(await one(`UPDATE quotes SET status = $2, updated_at = NOW(),
         sent_at = CASE WHEN $2 = 'envoye' THEN COALESCE(sent_at, NOW()) ELSE sent_at END,
-        accepted_at = CASE WHEN $2 = 'accepte' THEN NOW() WHEN $2 = 'a_valider' THEN NULL ELSE accepted_at END,
-        refused_at = CASE WHEN $2 = 'refuse' THEN NOW() WHEN $2 = 'a_valider' THEN NULL ELSE refused_at END
+        accepted_at = CASE WHEN $2 = 'accepte' THEN NOW() WHEN $2 IN ('a_valider', 'envoye', 'refuse') THEN NULL ELSE accepted_at END,
+        refused_at = CASE WHEN $2 = 'refuse' THEN NOW() WHEN $2 IN ('a_valider', 'envoye', 'accepte') THEN NULL ELSE refused_at END
       WHERE id = $1 RETURNING ${QUOTE_FIELDS}`, [id, st]));
   }
   res.json(await saveQuote(req.client, { ...cur, ...b }, id));
