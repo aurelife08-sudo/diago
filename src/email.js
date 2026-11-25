@@ -6,7 +6,7 @@ const BASE = (process.env.PUBLIC_URL || '').replace(/\/$/, '');
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 const URG = { haute: 'Urgent', moyenne: 'Normal', basse: 'Pas pressé' };
 
-export async function sendCallEmail(client, call) {
+export async function sendCallEmail(client, call, quote = null) {
   if (!client.email) return false;
   const who = call.caller_name || call.caller_number || 'Numéro masqué';
   const subject = `${call.urgency === 'haute' ? '🔴 Urgent — ' : ''}Nouvel appel : ${who}`;
@@ -24,6 +24,7 @@ export async function sendCallEmail(client, call) {
       ${call.address ? `<tr><td>Lieu</td><td style="color:#1f2a3d">${esc(call.address)}</td></tr>` : ''}
       ${call.diagnostics ? `<tr><td>Diagnostics</td><td style="color:#1f2a3d">${esc(call.diagnostics)}</td></tr>` : ''}
     </table>
+    ${quote ? `<p style="background:#f3f2ee;border-radius:14px;padding:14px;margin:14px 0 0"><b>Devis préparé :</b> ${esc(quote.number)} · ${(Number(quote.total_ttc) || 0).toLocaleString('fr-FR', { minimumFractionDigits: 2 })} € TTC — à vérifier et envoyer depuis l'onglet Devis.</p>` : ''}
     ${link ? `<p style="margin:20px 0"><a href="${link}" style="background:#2f5e45;color:#fff;text-decoration:none;padding:12px 20px;border-radius:999px;font-weight:600">Ouvrir dans Diago</a></p>` : ''}
   </div>`;
 
@@ -43,5 +44,41 @@ export async function sendCallEmail(client, call) {
   } catch (err) {
     console.warn('[email] échec :', err.message);
     return false;
+  }
+}
+
+/** Envoie le devis au client final. Retourne { ok } ou { ok: false, error }. */
+export async function sendQuoteEmail(client, quote, settings) {
+  if (!quote.customer_email) return { ok: false, error: "Pas d'adresse email pour ce client" };
+  if (!KEY) return { ok: false, error: "L'envoi d'emails n'est pas encore configuré (clé Resend manquante)" };
+  const co = settings.company || {};
+  const name = co.legal_name || client.name;
+  const link = `${BASE}/d/${quote.token}`;
+  const ttc = (Number(quote.total_ttc) || 0).toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const html = `
+  <div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:520px;margin:auto;color:#1f2a3d">
+    <p>Bonjour${quote.customer_name ? ` ${esc(quote.customer_name)}` : ''},</p>
+    <p>Suite à votre appel, voici notre devis pour vos diagnostics immobiliers${quote.address ? ` (${esc(quote.address)})` : ''}.</p>
+    <p style="background:#f3f2ee;border-radius:14px;padding:14px;margin:16px 0"><b>Devis ${esc(quote.number)}</b><br>Montant : <b>${ttc} € TTC</b></p>
+    <p style="margin:22px 0"><a href="${link}" style="background:#2f5e45;color:#fff;text-decoration:none;padding:12px 22px;border-radius:999px;font-weight:600">Voir et accepter le devis</a></p>
+    <p>Pour toute question, répondez simplement à cet email${co.phone ? ` ou appelez le ${esc(co.phone)}` : ''}.</p>
+    <p>Bien cordialement,<br>${esc(name)}</p>
+  </div>`;
+  try {
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${KEY}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        from: FROM.replace(/^[^<]*</, `${name.replace(/[<>"]/g, '')} <`), to: [quote.customer_email],
+        reply_to: co.email || (client.email || '').split(',')[0].trim() || undefined,
+        subject: `Votre devis ${quote.number} — ${name}`, html,
+      }),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
+    return { ok: true };
+  } catch (err) {
+    console.warn('[email devis] échec :', err.message);
+    return { ok: false, error: "L'email n'a pas pu partir" };
   }
 }

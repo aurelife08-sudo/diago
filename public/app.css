@@ -187,7 +187,7 @@ code { background: var(--fill); padding: 2px 6px; border-radius: 6px; font-size:
 
 /* Barre d'onglets flottante */
 .tabbar { position: fixed; z-index: 15; left: 50%; transform: translateX(-50%); bottom: calc(14px + env(safe-area-inset-bottom));
-  width: min(380px, calc(100% - 40px)); height: 64px; padding: 5px; border-radius: 999px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px;
+  width: min(440px, calc(100% - 28px)); height: 64px; padding: 5px; border-radius: 999px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px;
   border: 1px solid transparent;
   background: linear-gradient(180deg, rgba(255, 255, 255, .62), rgba(255, 255, 255, .4)) padding-box,
     linear-gradient(160deg, rgba(255, 255, 255, .98), rgba(255, 255, 255, .2) 40%, rgba(255, 255, 255, .75)) border-box;
@@ -242,3 +242,38 @@ audio { width: 100%; margin-top: 4px; }
 }
 @media (min-width: 640px) { .sheet { bottom: 24px; } }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+/* Devis */
+.q-top { display: flex; align-items: baseline; gap: 10px; }
+.q-amount { font-size: 19px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; letter-spacing: -.01em; }
+.banner .btn { margin-top: 8px; }
+.lines { display: flex; flex-direction: column; gap: 8px; padding: 10px 0 4px; }
+.qline { display: grid; grid-template-columns: minmax(0, 1fr) 56px 92px 34px; gap: 6px; align-items: center; }
+.qline input { border: 0; outline: 0; background: var(--fill); border-radius: 10px; padding: 8px 10px; font-size: 16px; width: 100%; }
+.qline input.r { text-align: right; font-variant-numeric: tabular-nums; }
+.qline .x { width: 34px; height: 34px; border: 0; background: none; color: var(--faint); cursor: pointer; border-radius: 50%; display: grid; place-items: center; }
+.qline .x:hover { color: var(--red); background: var(--red-soft); }
+.qhead { display: grid; grid-template-columns: minmax(0, 1fr) 56px 92px 34px; gap: 6px; font-size: 12px; color: var(--faint); font-weight: 600; }
+.qhead span:nth-child(2), .qhead span:nth-child(3) { text-align: right; padding-right: 10px; }
+.totals { padding: 10px 0 4px; font-variant-numeric: tabular-nums; }
+.totals div { display: flex; justify-content: space-between; padding: 3px 0; color: var(--muted); }
+.totals .ttc { color: var(--text); font-size: 20px; font-weight: 700; border-top: .5px solid var(--line); margin-top: 6px; padding-top: 8px; }
+.field.mini { flex-direction: row; gap: 12px; flex-wrap: wrap; }
+.mini label { flex: 1 1 120px; display: flex; flex-direction: column; gap: 4px; }
+.mini label span { font-size: 12.5px; color: var(--muted); font-weight: 500; }
+.mini input { background: var(--fill) !important; border-radius: 10px; padding: 8px 10px !important; }
+.prices { width: 100%; border-collapse: collapse; }
+.prices th { text-align: right; font-size: 12px; color: var(--faint); font-weight: 600; padding: 4px; }
+.prices th:first-child { text-align: left; }
+.prices td { padding: 5px 4px; border-top: .5px solid var(--line); }
+.prices td input { width: 84px; text-align: right; border: 0; outline: 0; background: var(--fill); border-radius: 10px; padding: 7px 10px; font-size: 16px; font-variant-numeric: tabular-nums; }
+.prices td:not(:first-child) { text-align: right; }
+.rule { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 10px 0; border-bottom: .5px solid var(--line); font-size: 15px; }
+.rule:last-child { border-bottom: 0; }
+.rule input { width: 70px; text-align: right; border: 0; outline: 0; background: var(--fill); border-radius: 10px; padding: 7px 10px; font-size: 16px; }
+.alt { background: var(--amber-soft); border-radius: 18px; padding: 12px 14px; margin-top: 10px; }
+.alt p { margin: 0 0 8px; color: var(--amber); font-weight: 600; font-size: 14px; }
+.alt .actions { margin-top: 0; flex-wrap: wrap; }
+@media (max-width: 420px) { .tab { font-size: 10.5px; } .qline { grid-template-columns: minmax(0, 1fr) 46px 80px 30px; } .qhead { grid-template-columns: minmax(0, 1fr) 46px 80px 30px; } }
+#qForm .sh-foot { flex-wrap: wrap; }
+#qForm .sh-foot .primary { flex: 1 1 100%; order: -1; }

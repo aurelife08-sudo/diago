@@ -17,6 +17,11 @@ Lis la transcription et réponds UNIQUEMENT avec un objet JSON, sans texte autou
  "callback_before": "créneau de rappel souhaité en quelques mots (ex: avant 18h, demain matin) sinon null",
  "address": "adresse ou ville du bien si elle est donnée, sinon null",
  "diagnostics": ["liste des diagnostics demandés parmi DPE, Amiante, Plomb, Électricité, Gaz, Termites, Carrez, Boutin, ERP, Audit énergétique ; vide si aucun"],
+ "email": "adresse email donnée à l'oral, reconstituée (arobase → @, point → ., tiret → -), en minuscules, sinon null",
+ "property_type": "appartement | maison | local | autre, sinon null",
+ "surface_m2": "surface du bien en m² (nombre), sinon null",
+ "build_year": "année de construction approximative (nombre) : avant 1949 → 1940, années 70 → 1975, après 2000 → 2005 ; sinon null",
+ "transaction": "vente | location | travaux | autre, sinon null",
  "is_spam": false
 }
 Urgence haute : vente/signature/location imminente (sous une semaine), problème bloquant, client très pressé. Basse : simple question sans délai.
@@ -71,7 +76,40 @@ function clean(j, evt) {
     callback_before: j.callback_before || null,
     address: j.address || null,
     diagnostics: diag.join(', ') || null,
+    ...property(j, evt),
     is_spam: j.is_spam === true,
+  };
+}
+
+// ---------- Infos du bien et email (pour le devis) ----------
+const PTYPES = ['appartement', 'maison', 'local', 'autre'];
+const TRANS = ['vente', 'location', 'travaux', 'autre'];
+function property(j, evt) {
+  const r = propertyRules(evt);
+  const surf = Number(String(j.surface_m2 ?? '').replace(',', '.'));
+  const year = Number(j.build_year);
+  const email = String(j.email || '').trim().toLowerCase().replace(/\s+/g, '');
+  return {
+    email: /^[^@\s]+@[^@\s]+\.[a-z]{2,}$/.test(email) ? email : r.email,
+    property_type: PTYPES.includes(j.property_type) ? j.property_type : r.property_type,
+    surface_m2: surf > 5 && surf < 5000 ? Math.round(surf) : r.surface_m2,
+    build_year: year >= 1500 && year <= 2100 ? Math.round(year) : r.build_year,
+    transaction: TRANS.includes(j.transaction) ? j.transaction : r.transaction,
+  };
+}
+export function propertyRules(evt) {
+  const said = String(evt.transcript || '').split('\n').filter((l) => /^\s*(user|client|caller)\s*:/i.test(l)).map((l) => l.replace(/^[^:]+:\s*/, '')).join(' ');
+  const t = said.toLowerCase();
+  const surf = /(\d{2,4}(?:[.,]\d+)?)\s*(?:m2|m²|mètres? carrés?|metres? carres?|m\b)/.exec(t);
+  let year = /\b(1[5-9]\d\d|20[0-2]\d)\b/.exec(t)?.[1];
+  if (!year && /avant (?:19)?49|ancien|vieux|xixe|19e/.test(t)) year = 1940;
+  const em = /([a-z0-9._%+-]+)\s*(?:@|arobase|at)\s*([a-z0-9-]+)\s*(?:\.|point|dot)\s*([a-z]{2,})/.exec(t.replace(/\s+(point|tiret)\s+/g, (m, w) => (w === 'point' ? '.' : '-')).replace(/\s+arobase\s+/g, '@'));
+  return {
+    email: em ? `${em[1]}@${em[2]}.${em[3]}` : null,
+    property_type: /appartement|studio|\bt[1-6]\b|\bf[1-6]\b/.test(t) ? 'appartement' : /maison|villa|chalet|pavillon|ferme/.test(t) ? 'maison' : /local|bureau|commerce|boutique/.test(t) ? 'local' : null,
+    surface_m2: surf ? Math.round(Number(surf[1].replace(',', '.'))) : null,
+    build_year: year ? Number(year) : null,
+    transaction: /\bvend|vente|compromis|acheteur/.test(t) ? 'vente' : /\bloue|location|locataire|bail/.test(t) ? 'location' : /travaux|rénov|renov|démoli|demoli/.test(t) ? 'travaux' : null,
   };
 }
 
@@ -102,6 +140,7 @@ function rules(evt) {
     callback_before: null,
     address: null,
     diagnostics,
+    ...propertyRules(evt),
     is_spam: false,
   };
 }

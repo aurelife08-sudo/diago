@@ -67,6 +67,7 @@ export async function migrate() {
       created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
     ALTER TABLE clients ADD COLUMN IF NOT EXISTS telnyx_assistant_id TEXT;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS quote_settings JSONB;
     CREATE INDEX IF NOT EXISTS calls_client_idx ON calls (client_id, started_at DESC);
 
     CREATE TABLE IF NOT EXISTS appointments (
@@ -89,5 +90,39 @@ export async function migrate() {
       created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
     CREATE INDEX IF NOT EXISTS appts_client_day_idx ON appointments (client_id, day);
+
+    CREATE TABLE IF NOT EXISTS quotes (
+      id              SERIAL PRIMARY KEY,
+      client_id       INT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+      call_id         INT REFERENCES calls(id) ON DELETE SET NULL,
+      number          TEXT NOT NULL,
+      token           TEXT NOT NULL UNIQUE,
+      status          TEXT NOT NULL DEFAULT 'a_valider',
+      source          TEXT NOT NULL DEFAULT 'manuel',
+      customer_name   TEXT,
+      customer_email  TEXT,
+      customer_phone  TEXT,
+      address         TEXT,
+      property_type   TEXT,
+      surface_m2      INT,
+      build_year      INT,
+      transaction     TEXT,
+      diagnostics     TEXT,
+      guessed         BOOLEAN NOT NULL DEFAULT FALSE,
+      lines           JSONB NOT NULL DEFAULT '[]',
+      discount_pct    NUMERIC NOT NULL DEFAULT 0,
+      tva_rate        NUMERIC NOT NULL DEFAULT 20,
+      notes           TEXT,
+      total_ht        NUMERIC,
+      total_ttc       NUMERIC,
+      valid_until     DATE,
+      sent_at         TIMESTAMPTZ,
+      accepted_at     TIMESTAMPTZ,
+      refused_at      TIMESTAMPTZ,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS quotes_client_idx ON quotes (client_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS quotes_call_idx ON quotes (call_id);
   `);
 }

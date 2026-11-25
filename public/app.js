@@ -68,7 +68,7 @@
   const diagList = (s) => (s ? String(s).split(',').map((x) => x.trim()).filter(Boolean) : []);
 
   // ---------- État ----------
-  const state = { me: null, view: 'calls', calls: [], known: new Set(), filter: 'all', q: '', day: todayIso(), start: null, mode: 'opt', route: null, callId: null };
+  const state = { me: null, view: 'calls', calls: [], known: new Set(), filter: 'all', q: '', day: todayIso(), start: null, mode: 'opt', route: null, callId: null, quotes: null, qfilter: null, qsettings: null };
 
   // ---------- Toast / feuille ----------
   let toastT;
@@ -95,20 +95,21 @@
   }
 
   // ---------- Navigation ----------
-  const HASH = { calls: '#appels', route: '#tournee', settings: '#reglages' };
+  const HASH = { calls: '#appels', quotes: '#devis', route: '#tournee', settings: '#reglages' };
   function show(view) {
     state.view = view;
-    for (const v of ['calls', 'route', 'settings']) $(`#v-${v}`).hidden = v !== view;
+    for (const v of ['calls', 'quotes', 'route', 'settings']) $(`#v-${v}`).hidden = v !== view;
     $$('.tab').forEach((b) => b.classList.toggle('on', b.dataset.view === view));
     if (!/^#call-/.test(location.hash) || view !== 'calls') history.replaceState(null, '', HASH[view]);
     if (view === 'route') loadRoute();
+    if (view === 'quotes') loadQuotes().catch((err) => toast(err.message));
     if (view === 'settings') fillSettings();
     window.scrollTo({ top: 0 });
   }
   $('#tabbar').addEventListener('click', (e) => { const b = e.target.closest('[data-view]'); if (b) show(b.dataset.view); });
   $('#avatar').addEventListener('click', () => show('settings'));
   $('#refreshBtn').addEventListener('click', async () => {
-    if (state.view === 'route') await loadRoute(); else await loadCalls({ silent: true });
+    if (state.view === 'route') await loadRoute(); else if (state.view === 'quotes') await loadQuotes({ silent: true }); else await loadCalls({ silent: true });
     toast('À jour');
   });
 
@@ -145,6 +146,7 @@
           ${c.callback_before ? `<span class="tag amber">Rappeler ${esc(c.callback_before)}</span>` : ''}
           ${c.address ? `<span class="tag">${esc(c.address)}</span>` : ''}
           ${c.status !== 'a_rappeler' ? `<span class="tag ${c.status === 'rdv_pris' ? 'leaf' : ''}">${STATUS[c.status]}</span>` : ''}
+          ${c.quote_id ? `<span class="tag green">Devis ${eur(c.quote_total)}${c.quote_status === 'accepte' ? ' · accepté' : ''}</span>` : ''}
         </div>
         ${c.status === 'a_rappeler' ? `<div class="actions">
           ${c.caller_number ? `<a class="btn primary sm" href="tel:${esc(c.caller_number)}" data-stop>${ic('phone')}Rappeler</a>` : ''}
@@ -165,6 +167,7 @@
     state.calls = calls;
     renderCalls();
     loadStats().catch(() => {});
+    if (fresh.length || !state.quotes) loadQuotes({ silent: true }).catch(() => {});
     if (fresh.length) {
       const c = fresh[0];
       toast(`Nouvel appel : ${c.caller_name || fmtPhone(c.caller_number)}${c.urgency === 'haute' ? ' — urgent' : ''}`);
@@ -197,7 +200,7 @@
       <div class="block"><h3>Résumé</h3><p>${esc(c.summary)}</p></div>
       <div class="block next"><h3>À faire</h3><p>${esc(c.next_action || 'Rappeler le client.')}</p></div>
       ${c.caller_number ? `<div class="two"><a class="btn primary" href="tel:${esc(c.caller_number)}">${ic('phone')}Appeler</a><a class="btn" href="sms:${esc(c.caller_number)}">${ic('sms')}SMS</a></div>` : ''}
-      <button class="btn block" id="planBtn" style="margin-bottom:10px">${ic('cal')}Planifier un rendez-vous</button>
+      <div class="two"><button class="btn" id="planBtn">${ic('cal')}Planifier un RDV</button>${c.quote ? `<button class="btn" id="quoteBtn">${ic('doc')}Devis ${eur(c.quote.total_ttc)}</button>` : `<button class="btn" id="quoteBtn">${ic('doc')}Faire un devis</button>`}</div>
       <div class="seg" id="stSeg" style="margin-bottom:10px">${Object.entries(STATUS).map(([k, v]) => `<button class="${c.status === k ? 'on' : ''}" data-status="${k}">${v}</button>`).join('')}</div>
       <div class="block grid2">
         <div><span>Numéro</span>${esc(fmtPhone(c.caller_number))}</div>
@@ -213,6 +216,11 @@
       const b = e.target.closest('[data-status]'); if (!b) return;
       await setStatus(id, b.dataset.status);
       $$('#stSeg button').forEach((x) => x.classList.toggle('on', x === b));
+    });
+    $('#quoteBtn').addEventListener('click', async () => {
+      if (c.quote) return openQuote(c.quote.id).catch((err) => toast(err.message));
+      if (!state.qsettings) await loadQuoteSettings().catch(() => {});
+      quoteEditor(null, { call_id: c.id, customer_name: c.caller_name || '', customer_phone: c.caller_number || '', address: c.address || '', diagnostics: c.diagnostics || '' });
     });
     $('#planBtn').addEventListener('click', () => openApptForm({ prefill: {
       name: c.caller_name || '', phone: c.caller_number || '', address: c.address || '', diagnostics: diagList(c.diagnostics), call_id: c.id,
@@ -550,6 +558,253 @@
   $('#dayInput').addEventListener('change', (e) => { if (e.target.value) { state.day = e.target.value; loadRoute(); } });
 
   // =====================================================================
+  // DEVIS
+  // =====================================================================
+  const QST = { a_valider: 'À valider', envoye: 'Envoyé', accepte: 'Accepté', refuse: 'Refusé' };
+  const QDIAGS = ['DPE', 'Amiante', 'Plomb', 'Électricité', 'Gaz', 'Termites', 'Carrez', 'Boutin', 'ERP', 'Audit énergétique'];
+  const eur = (n) => `${(Number(n) || 0).toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €`;
+  const num = (v) => { const n = Number(String(v ?? '').replace(/\s/g, '').replace(',', '.')); return Number.isFinite(n) ? n : 0; };
+  function qTotals(lines, discount, tva) {
+    const sub = lines.reduce((s, l) => s + num(l.qty) * num(l.unit_ht), 0);
+    const disc = Math.round(sub * num(discount)) / 100, ht = Math.round((sub - disc) * 100) / 100, t = Math.round(ht * num(tva)) / 100;
+    return { sub, disc, ht, tva: t, ttc: ht + t };
+  }
+
+  async function loadQuoteSettings() { state.qsettings = await api('/quote-settings'); return state.qsettings; }
+  async function loadQuotes({ silent } = {}) {
+    if (!silent && !state.quotes) $('#quoteList').innerHTML = '<div class="skeleton"></div>';
+    const [list] = await Promise.all([api('/quotes'), state.qsettings ? null : loadQuoteSettings()]);
+    state.quotes = list;
+    const todo = list.filter((x) => x.status === 'a_valider').length;
+    $('#qBadge').hidden = !todo; $('#qBadge').textContent = todo;
+    if (!state.qfilter) state.qfilter = todo ? 'a_valider' : 'all';
+    renderQuotes();
+  }
+  function renderQuotes() {
+    const list = state.quotes || [];
+    const todo = list.filter((x) => x.status === 'a_valider').length;
+    $('#qSub').textContent = todo ? `${todo} à valider` : list.length ? 'Tout est à jour' : '';
+    $('#qBanner').innerHTML = state.qsettings && !state.qsettings.configured
+      ? `<div class="banner">Les devis sont calculés avec des tarifs d'exemple. Renseignez les vôtres pour que l'agent prépare des devis justes.<br><button class="btn primary sm" data-tariffs>${ic('euro')}Saisir mes tarifs</button></div>` : '';
+    $$('#qChips .chip').forEach((b) => {
+      const n = b.dataset.q === 'all' ? list.length : list.filter((x) => x.status === b.dataset.q).length;
+      b.classList.toggle('on', b.dataset.q === state.qfilter);
+      b.textContent = `${{ a_valider: 'À valider', envoye: 'Envoyés', accepte: 'Acceptés', refuse: 'Refusés', all: 'Tous' }[b.dataset.q]}${n ? ` · ${n}` : ''}`;
+    });
+    const shown = list.filter((x) => state.qfilter === 'all' || x.status === state.qfilter);
+    const el = $('#quoteList');
+    if (!shown.length) {
+      el.innerHTML = `<div class="card empty"><b>${list.length ? 'Aucun devis ici' : 'Aucun devis pour le moment'}</b>${list.length ? 'Essayez un autre filtre.' : "Après chaque appel pour des diagnostics, l'agent prépare un devis avec vos tarifs. Il arrive ici, à vérifier avant l'envoi."}</div>`;
+      return;
+    }
+    el.innerHTML = shown.map((x) => `
+      <article class="card item ${x.status === 'refuse' ? 'dim' : ''}" data-qid="${x.id}" tabindex="0">
+        <div class="row"><span class="name">${esc(x.customer_name || (x.customer_phone ? fmtPhone(x.customer_phone) : 'Client sans nom'))}</span><span class="q-amount">${eur(x.total_ttc)}</span></div>
+        <div class="addr">${esc(x.number)} · ${timeAgo(x.created_at)}${x.address ? ` · ${esc(x.address)}` : ''}</div>
+        <div class="tags">
+          <span class="tag ${x.status === 'accepte' ? 'leaf' : x.status === 'refuse' ? 'red' : x.status === 'envoye' ? 'green' : 'amber'}">${QST[x.status]}</span>
+          ${x.source === 'agent' ? '<span class="tag green">Préparé par l\'agent</span>' : ''}
+          ${diagList(x.diagnostics).slice(0, 4).map((d) => `<span class="tag">${esc(d)}</span>`).join('')}
+          ${x.guessed ? '<span class="tag amber">Diagnostics à confirmer</span>' : ''}
+          ${!x.customer_email && x.status === 'a_valider' ? '<span class="tag amber">Pas d\'email</span>' : ''}
+        </div>
+      </article>`).join('');
+  }
+  $('#quoteList').addEventListener('click', (e) => { const c = e.target.closest('[data-qid]'); if (c) openQuote(Number(c.dataset.qid)).catch((err) => toast(err.message)); });
+  $('#quoteList').addEventListener('keydown', (e) => { const c = e.target.closest('[data-qid]'); if (c && e.key === 'Enter') openQuote(Number(c.dataset.qid)); });
+  $('#qChips').addEventListener('click', (e) => { const b = e.target.closest('[data-q]'); if (b) { state.qfilter = b.dataset.q; renderQuotes(); } });
+  $('#qBanner').addEventListener('click', (e) => { if (e.target.closest('[data-tariffs]')) openTariffs(); });
+  $('#tariffsBtn').addEventListener('click', () => openTariffs());
+  $('#newQuote').addEventListener('click', () => quoteEditor(null));
+
+  async function openQuote(id) { quoteEditor(await api(`/quotes/${id}`)); }
+
+  function quoteEditor(qt, prefill = {}) {
+    const d = qt || { status: 'a_valider', lines: [], discount_pct: 0, tva_rate: state.qsettings?.tva_rate ?? 20, ...prefill };
+    let lines = (d.lines || []).map((l) => ({ ...l }));
+    let ptype = d.property_type || '', trans = d.transaction || '';
+    const chosen = new Set(diagList(d.diagnostics));
+    const meta = qt ? `${d.number} · ${QST[d.status]}${d.source === 'agent' ? " · préparé par l'agent" : ''}` : 'Nouveau devis';
+    openSheet(qt ? (d.customer_name || 'Devis') : 'Nouveau devis', meta, `
+      <form class="form" id="qForm" autocomplete="off">
+        ${d.guessed ? '<div class="banner" style="margin:0">Le client n\'a pas cité ses diagnostics : la liste a été déduite du bien (vente ou location, année). Vérifiez-la avant l\'envoi.</div>' : ''}
+        <div class="card group">
+          <label class="field"><span>Client</span><input name="customer_name" value="${esc(d.customer_name || '')}" placeholder="Nom du client" /></label>
+          <label class="field"><span>Email (pour l'envoi)</span><input name="customer_email" type="email" inputmode="email" value="${esc(d.customer_email || '')}" placeholder="client@email.fr" /></label>
+          <label class="field"><span>Téléphone</span><input name="customer_phone" type="tel" value="${esc(d.customer_phone ? fmtPhone(d.customer_phone) : '')}" /></label>
+          <label class="field"><span>Adresse du bien</span><input name="address" value="${esc(d.address || '')}" placeholder="Numéro, rue, ville" /><div class="sugg" hidden></div></label>
+        </div>
+        <div class="card group">
+          <div class="field"><span>Bien</span><div class="seg" id="qType">${['appartement', 'maison', 'local'].map((k) => `<button type="button" data-v="${k}" class="${ptype === k ? 'on' : ''}">${k[0].toUpperCase() + k.slice(1)}</button>`).join('')}</div></div>
+          <div class="field"><span>Projet</span><div class="seg" id="qTrans">${['vente', 'location', 'travaux'].map((k) => `<button type="button" data-v="${k}" class="${trans === k ? 'on' : ''}">${k[0].toUpperCase() + k.slice(1)}</button>`).join('')}</div></div>
+          <div class="field mini"><label><span>Surface (m²)</span><input name="surface_m2" inputmode="numeric" value="${esc(d.surface_m2 ?? '')}" /></label><label><span>Année de construction</span><input name="build_year" inputmode="numeric" value="${esc(d.build_year ?? '')}" placeholder="ex. 1975" /></label></div>
+          <div class="field"><span>Diagnostics</span><div class="chipset" id="qDiags">${QDIAGS.map((x) => `<button type="button" class="chip ${chosen.has(x) ? 'on' : ''}" data-d="${esc(x)}">${esc(x)}</button>`).join('')}</div>
+            <button type="button" class="btn sm" id="qCompute" style="margin-top:10px;align-self:flex-start">${ic('refresh')}Recalculer avec mes tarifs</button></div>
+        </div>
+        <div class="card group">
+          <div class="field"><span>Lignes du devis (prix HT)</span>
+            <div class="qhead"><span>Désignation</span><span>Qté</span><span>Prix HT</span><span></span></div>
+            <div class="lines" id="qLines"></div>
+            <button type="button" class="link" id="qAdd" style="align-self:flex-start">+ Ajouter une ligne</button></div>
+          <div class="field mini"><label><span>Remise (%)</span><input name="discount_pct" inputmode="decimal" value="${esc(d.discount_pct ?? 0)}" /></label><label><span>TVA (%)</span><input name="tva_rate" inputmode="decimal" value="${esc(d.tva_rate ?? 20)}" /></label></div>
+          <div class="totals" id="qTotals"></div>
+        </div>
+        <div class="card group"><label class="field"><span>Note sur le devis (visible par le client)</span><textarea name="notes" placeholder="Ex. : accès par le garage, clés chez le voisin…">${esc(d.notes || '')}</textarea></label></div>
+        <div id="qAlt"></div>
+        ${qt ? `<div class="two"><a class="btn" href="/api/quotes/${d.id}/apercu?t=${encodeURIComponent(token)}" target="_blank" rel="noopener">${ic('eye')}Aperçu</a>${d.call_id ? `<button type="button" class="btn" id="qCall">${ic('phone')}Voir l'appel</button>` : '<span></span>'}</div>` : ''}
+        ${qt && d.status !== 'a_valider' ? `<div class="seg" id="qStatus">${['envoye', 'accepte', 'refuse'].map((k) => `<button type="button" data-st="${k}" class="${d.status === k ? 'on' : ''}">${QST[k]}</button>`).join('')}</div>` : ''}
+        <div class="sh-foot">
+          ${qt ? '<button type="button" class="btn danger" id="qDel">Supprimer</button>' : ''}
+          <button type="submit" class="btn">Enregistrer</button>
+          <button type="button" class="btn primary" id="qSend">${ic('send')}${d.status === 'a_valider' ? 'Valider et envoyer' : 'Renvoyer'}</button>
+        </div>
+      </form>`);
+    const f = $('#qForm');
+    autocomplete(f.address);
+    const drawLines = () => {
+      $('#qLines').innerHTML = lines.map((l, i) => `<div class="qline" data-i="${i}">
+          <input data-k="label" value="${esc(l.label)}" aria-label="Désignation" />
+          <input data-k="qty" class="r" inputmode="decimal" value="${esc(l.qty)}" aria-label="Quantité" />
+          <input data-k="unit_ht" class="r" inputmode="decimal" value="${esc(l.unit_ht)}" aria-label="Prix HT" />
+          <button type="button" class="x" data-rm="${i}" aria-label="Retirer la ligne">${ic('x')}</button></div>`).join('') || '<p class="addr" style="margin:0">Aucune ligne. Choisissez des diagnostics puis « Recalculer avec mes tarifs ».</p>';
+      drawTotals();
+    };
+    const drawTotals = () => {
+      const t = qTotals(lines, f.discount_pct.value, f.tva_rate.value);
+      $('#qTotals').innerHTML = `${t.disc ? `<div><span>Sous-total HT</span><span>${eur(t.sub)}</span></div><div><span>Remise ${num(f.discount_pct.value)} %</span><span>− ${eur(t.disc)}</span></div>` : ''}
+        <div><span>Total HT</span><span>${eur(t.ht)}</span></div><div><span>TVA ${num(f.tva_rate.value)} %</span><span>${eur(t.tva)}</span></div>
+        <div class="ttc"><span>Total TTC</span><span>${eur(t.ttc)}</span></div>`;
+    };
+    drawLines();
+    $('#qLines').addEventListener('input', (e) => {
+      const row = e.target.closest('.qline'); if (!row) return;
+      const l = lines[Number(row.dataset.i)], k = e.target.dataset.k;
+      l[k] = k === 'label' ? e.target.value : e.target.value;
+      drawTotals();
+    });
+    $('#qLines').addEventListener('click', (e) => { const b = e.target.closest('[data-rm]'); if (b) { lines.splice(Number(b.dataset.rm), 1); drawLines(); } });
+    $('#qAdd').addEventListener('click', () => { lines.push({ label: '', qty: 1, unit_ht: 0 }); drawLines(); $$('#qLines .qline input[data-k=label]').pop()?.focus(); });
+    f.discount_pct.addEventListener('input', drawTotals); f.tva_rate.addEventListener('input', drawTotals);
+    const segPick = (sel, set) => $(sel).addEventListener('click', (e) => {
+      const b = e.target.closest('[data-v]'); if (!b) return;
+      const on = !b.classList.contains('on');
+      $$(`${sel} button`).forEach((x) => x.classList.toggle('on', on && x === b));
+      set(on ? b.dataset.v : '');
+    });
+    segPick('#qType', (v) => (ptype = v)); segPick('#qTrans', (v) => (trans = v));
+    $('#qDiags').addEventListener('click', (e) => { const b = e.target.closest('[data-d]'); if (b) b.classList.toggle('on'); });
+    $('#qCompute').addEventListener('click', async () => {
+      const diags = $$('#qDiags .chip.on').map((x) => x.dataset.d);
+      const r = await api('/quotes/compute', { method: 'POST', body: { diagnostics: diags, property_type: ptype, transaction: trans, surface_m2: f.surface_m2.value, build_year: f.build_year.value } }).catch((err) => toast(err.message));
+      if (!r) return;
+      if (!r.diagnostics.length) { toast('Choisissez des diagnostics, ou indiquez vente / location'); return; }
+      $$('#qDiags .chip').forEach((x) => x.classList.toggle('on', r.diagnostics.includes(x.dataset.d)));
+      lines = r.lines; f.discount_pct.value = r.discount_pct; f.tva_rate.value = r.tva_rate;
+      drawLines(); toast(r.guessed ? 'Diagnostics déduits du bien, à vérifier' : 'Prix recalculés avec vos tarifs');
+    });
+    const body = () => ({
+      customer_name: f.customer_name.value, customer_email: f.customer_email.value.trim(), customer_phone: f.customer_phone.value, address: f.address.value,
+      property_type: ptype || null, transaction: trans || null, surface_m2: f.surface_m2.value, build_year: f.build_year.value,
+      diagnostics: $$('#qDiags .chip.on').map((x) => x.dataset.d), lines: lines.map((l) => ({ label: l.label, qty: num(l.qty), unit_ht: num(l.unit_ht) })),
+      discount_pct: num(f.discount_pct.value), tva_rate: num(f.tva_rate.value), notes: f.notes.value, call_id: d.call_id || undefined,
+    });
+    let saved = qt;
+    const save = async () => {
+      saved = await api(saved ? `/quotes/${saved.id}` : '/quotes', { method: saved ? 'PATCH' : 'POST', body: body() });
+      const i = (state.quotes || []).findIndex((x) => x.id === saved.id);
+      if (i >= 0) state.quotes[i] = saved; else (state.quotes ||= []).unshift(saved);
+      renderQuotes(); loadQuotes({ silent: true }).catch(() => {});
+      return saved;
+    };
+    f.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      try { await save(); closeSheet(); toast('Devis enregistré'); } catch (err) { toast(err.message); }
+    });
+    $('#qDel')?.addEventListener('click', async () => {
+      const b = $('#qDel');
+      if (!b.dataset.sure) { b.dataset.sure = '1'; b.textContent = 'Confirmer la suppression'; return; }
+      await api(`/quotes/${saved.id}`, { method: 'DELETE' });
+      state.quotes = (state.quotes || []).filter((x) => x.id !== saved.id);
+      closeSheet(); renderQuotes(); loadQuotes({ silent: true }).catch(() => {}); toast('Devis supprimé');
+    });
+    $('#qCall')?.addEventListener('click', () => { show('calls'); openCall(d.call_id).catch((err) => toast(err.message)); });
+    $('#qStatus')?.addEventListener('click', async (e) => {
+      const b = e.target.closest('[data-st]'); if (!b) return;
+      saved = await api(`/quotes/${saved.id}`, { method: 'PATCH', body: { status: b.dataset.st } });
+      $$('#qStatus button').forEach((x) => x.classList.toggle('on', x === b));
+      $('#shMeta').textContent = `${saved.number} · ${QST[saved.status]}`;
+      loadQuotes({ silent: true }).catch(() => {}); toast(`Devis marqué « ${QST[saved.status]} »`);
+    });
+    const publicLink = () => `${location.origin}/d/${saved.token}`;
+    const markSent = async () => { if (saved.status === 'a_valider') saved = await api(`/quotes/${saved.id}`, { method: 'PATCH', body: { status: 'envoye' } }); loadQuotes({ silent: true }).catch(() => {}); };
+    const showAlt = (why) => {
+      const phone = saved.customer_phone || '';
+      $('#qAlt').innerHTML = `<div class="alt"><p>${esc(why)}</p><div class="actions">
+          ${phone ? `<a class="btn sm" id="qSms" href="sms:${esc(phone)}?&body=${encodeURIComponent(`Bonjour, voici votre devis ${saved.number} : ${publicLink()}`)}">${ic('sms')}Envoyer par SMS</a>` : ''}
+          <button type="button" class="btn sm" id="qCopy">${ic('link')}Copier le lien du devis</button></div></div>`;
+      $('#qAlt').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      $('#qSms')?.addEventListener('click', () => { markSent().catch(() => {}); });
+      $('#qCopy').addEventListener('click', async () => {
+        await markSent().catch(() => {});
+        try { await navigator.clipboard.writeText(publicLink()); toast('Lien copié : devis marqué envoyé'); } catch { toast(publicLink()); }
+      });
+    };
+    $('#qSend').addEventListener('click', async () => {
+      const b = $('#qSend'); b.disabled = true;
+      try {
+        if (!lines.length) { toast('Ajoutez au moins une ligne'); return; }
+        await save();
+        if (!saved.customer_email) { showAlt("Pas d'email pour ce client : envoyez le lien autrement."); return; }
+        saved = await api(`/quotes/${saved.id}/send`, { method: 'POST' });
+        closeSheet(); loadQuotes({ silent: true }).catch(() => {}); toast(`Devis envoyé à ${saved.customer_email}`);
+      } catch (err) { if (saved) showAlt(`${err.message}. Vous pouvez l'envoyer autrement :`); else toast(err.message); }
+      finally { b.disabled = false; }
+    });
+  }
+
+  async function openTariffs() {
+    const s = state.qsettings || (await loadQuoteSettings());
+    const co = s.company;
+    openSheet('Mes tarifs', "Utilisés par l'agent pour préparer les devis", `
+      <form class="form" id="tForm" autocomplete="off">
+        <div class="card group" style="padding:8px 14px">
+          <table class="prices"><thead><tr><th>Diagnostic (HT)</th><th>Appartement</th><th>Maison</th></tr></thead><tbody>
+          ${QDIAGS.map((x) => `<tr><td>${esc(x)}</td><td><input inputmode="decimal" data-d="${esc(x)}" data-k="appartement" value="${s.prices[x]?.appartement ?? ''}" /> €</td><td><input inputmode="decimal" data-d="${esc(x)}" data-k="maison" value="${s.prices[x]?.maison ?? ''}" /> €</td></tr>`).join('')}
+          </tbody></table>
+        </div>
+        <div class="card group">
+          <div class="rule">Remise de <input name="pack_pct" inputmode="decimal" value="${s.pack_pct}" /> % dès <input name="pack_min" inputmode="numeric" value="${s.pack_min}" /> diagnostics</div>
+          <div class="rule">Au-delà de <input name="large_m2" inputmode="numeric" value="${s.large_m2}" /> m² : + <input name="large_pct" inputmode="decimal" value="${s.large_pct}" /> %</div>
+          <div class="rule">Frais de déplacement <input name="travel_fee" inputmode="decimal" value="${s.travel_fee}" /> € HT</div>
+          <div class="rule">TVA <input name="tva_rate" inputmode="decimal" value="${s.tva_rate}" /> % · devis valable <input name="validity_days" inputmode="numeric" value="${s.validity_days}" /> jours</div>
+        </div>
+        <div class="section-t" style="margin:6px 6px 0">Votre société (en-tête du devis)</div>
+        <div class="card group">
+          <label class="field"><span>Raison sociale</span><input name="legal_name" value="${esc(co.legal_name)}" placeholder="${esc(state.me?.name || '')}" /></label>
+          <label class="field"><span>SIRET</span><input name="siret" value="${esc(co.siret)}" /></label>
+          <label class="field"><span>Adresse</span><input name="caddress" value="${esc(co.address)}" /></label>
+          <label class="field"><span>Téléphone</span><input name="cphone" type="tel" value="${esc(co.phone)}" /></label>
+          <label class="field"><span>Email (réponses des clients)</span><input name="cemail" type="email" value="${esc(co.email)}" /></label>
+          <label class="field"><span>Mentions en bas du devis</span><textarea name="mentions" placeholder="Assurance RCP, certifications, conditions de paiement…">${esc(co.mentions)}</textarea></label>
+        </div>
+        <button type="submit" class="btn primary block">Enregistrer mes tarifs</button>
+      </form>`);
+    $('#tForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const f = e.target, prices = {};
+      $$('#tForm .prices input').forEach((i) => { (prices[i.dataset.d] ||= {})[i.dataset.k] = i.value; });
+      const g = (n) => f.elements[n].value;
+      try {
+        state.qsettings = await api('/quote-settings', { method: 'PUT', body: {
+          prices, pack_pct: g('pack_pct'), pack_min: g('pack_min'), large_m2: g('large_m2'), large_pct: g('large_pct'), travel_fee: g('travel_fee'), tva_rate: g('tva_rate'), validity_days: g('validity_days'),
+          company: { legal_name: g('legal_name'), siret: g('siret'), address: g('caddress'), phone: g('cphone'), email: g('cemail'), mentions: g('mentions') },
+        } });
+        closeSheet(); renderQuotes(); toast('Tarifs enregistrés');
+      } catch (err) { toast(err.message); }
+    });
+  }
+
+  // =====================================================================
   // RÉGLAGES
   // =====================================================================
   function fillSettings() {
@@ -588,7 +843,7 @@
       $('#avatar').textContent = initials(state.me.name);
       document.title = `Diago · ${state.me.name}`;
       const h = location.hash;
-      if (h === '#tournee') show('route'); else if (h === '#reglages') show('settings'); else show('calls');
+      if (h === '#tournee') show('route'); else if (h === '#devis') show('quotes'); else if (h === '#reglages') show('settings'); else show('calls');
       await loadCalls();
       const m = /^#call-(\d+)$/.exec(h);
       if (m) openCall(Number(m[1])).catch(() => {});

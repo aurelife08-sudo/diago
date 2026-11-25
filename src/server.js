@@ -8,7 +8,8 @@ import { fromVapi, fromRetell, fromGeneric, normNumber } from './providers.js';
 import { fromTelnyx, listFinishedConversations } from './telnyx.js';
 import { findSlots, bookSlot, linkAgentAppointments } from './booking.js';
 import { classify } from './ai.js';
-import { sendCallEmail } from './email.js';
+import { sendCallEmail, sendQuoteEmail } from './email.js';
+import { quoteFromCall, saveQuote, listQuotes, settingsOf, cleanSettings, guessDiagnostics, buildLines, quotePage, QUOTE_FIELDS, DIAG_LIST } from './quotes.js';
 import { geocode, planDay } from './geo.js';
 
 const PORT = process.env.PORT || 3000;
@@ -101,7 +102,9 @@ async function storeCall(evt, client) {
       ai.address, ai.diagnostics, ai.is_spam, ai.is_spam ? 'termine' : 'a_rappeler'],
   );
   if (call) { try { if (await linkAgentAppointments(client.id, call)) call.status = 'rdv_pris'; } catch (err) { console.warn('[rdv] liaison impossible :', err.message); } }
-  if (call && !call.is_spam && (await sendCallEmail(client, call))) await q('UPDATE calls SET email_sent = TRUE WHERE id = $1', [call.id]);
+  let quote = null;
+  if (call) { try { quote = await quoteFromCall(client, call, ai); } catch (err) { console.warn('[devis] création impossible :', err.message); } }
+  if (call && !call.is_spam && (await sendCallEmail(client, call, quote))) await q('UPDATE calls SET email_sent = TRUE WHERE id = $1', [call.id]);
   console.log(`[appel] ${call?.id ?? '(doublon)'} rangé pour ${client.name} (${ai.urgency})`);
   return call;
 }
@@ -209,9 +212,11 @@ api.get('/calls', wrap(async (req, res) => {
   if (Date.now() - lastSync > 20000) await Promise.race([syncTelnyx(), new Promise((r) => setTimeout(r, 8000))]);
   res.json(await all(
     `SELECT c.id, c.caller_name, c.caller_number, c.started_at, c.duration_sec, c.summary, c.next_action, c.request_type, c.urgency, c.status,
-            c.callback_before, c.address, c.diagnostics, c.is_spam, r.day AS appt_day, r.win_start AS appt_start
+            c.callback_before, c.address, c.diagnostics, c.is_spam, r.day AS appt_day, r.win_start AS appt_start,
+            dq.id AS quote_id, dq.total_ttc AS quote_total, dq.status AS quote_status
        FROM calls c
        LEFT JOIN LATERAL (SELECT day, win_start FROM appointments a WHERE a.call_id = c.id ORDER BY day, win_start NULLS LAST LIMIT 1) r ON TRUE
+       LEFT JOIN LATERAL (SELECT id, total_ttc, status FROM quotes x WHERE x.call_id = c.id ORDER BY id DESC LIMIT 1) dq ON TRUE
       WHERE c.client_id = $1 AND NOT c.is_spam
       ORDER BY (c.status = 'a_rappeler') DESC,
                CASE c.urgency WHEN 'haute' THEN 0 WHEN 'moyenne' THEN 1 ELSE 2 END,
@@ -221,6 +226,7 @@ api.get('/calls', wrap(async (req, res) => {
 api.get('/calls/:id', wrap(async (req, res) => {
   const c = await one('SELECT * FROM calls WHERE id = $1 AND client_id = $2', [Number(req.params.id), req.client.id]);
   if (!c) return res.status(404).json({ error: 'Appel introuvable' });
+  c.quote = await one('SELECT id, number, status, total_ttc FROM quotes WHERE call_id = $1 ORDER BY id DESC LIMIT 1', [c.id]);
   res.json(c);
 }));
 api.patch('/calls/:id', wrap(async (req, res) => {
@@ -308,7 +314,90 @@ api.get('/route', wrap(async (req, res) => {
   res.json({ day, start, home, appointments: appts, plan });
 }));
 
+// ---------- Devis ----------
+api.get('/quote-settings', (req, res) => res.json({ ...settingsOf(req.client), diagnostics: DIAG_LIST }));
+api.put('/quote-settings', wrap(async (req, res) => {
+  const qs = cleanSettings(req.body || {}, req.client.quote_settings);
+  await q('UPDATE clients SET quote_settings = $2 WHERE id = $1', [req.client.id, JSON.stringify(qs)]);
+  res.json({ ...settingsOf({ quote_settings: qs }), diagnostics: DIAG_LIST });
+}));
+api.get('/quotes', wrap(async (req, res) => res.json(await listQuotes(req.client.id))));
+api.get('/quotes/:id', wrap(async (req, res) => {
+  const qt = await one(`SELECT ${QUOTE_FIELDS} FROM quotes WHERE id = $1 AND client_id = $2`, [Number(req.params.id), req.client.id]);
+  if (!qt) return res.status(404).json({ error: 'Devis introuvable' });
+  res.json(qt);
+}));
+// Lignes calculées avec les tarifs (pour l'éditeur : « Recalculer avec mes tarifs »)
+api.post('/quotes/compute', wrap(async (req, res) => {
+  const b = req.body || {}, s = settingsOf(req.client);
+  const g = guessDiagnostics(b);
+  const diags = g.list;
+  res.json({ diagnostics: diags, guessed: g.guessed, lines: buildLines(s, { diags, property_type: b.property_type, surface_m2: b.surface_m2 }),
+    discount_pct: diags.length >= s.pack_min && s.pack_pct ? s.pack_pct : 0, tva_rate: s.tva_rate });
+}));
+api.post('/quotes', wrap(async (req, res) => {
+  const b = req.body || {};
+  if (b.call_id && !(await one('SELECT 1 FROM calls WHERE id = $1 AND client_id = $2', [Number(b.call_id), req.client.id]))) return res.status(400).json({ error: 'Appel inconnu' });
+  res.status(201).json(await saveQuote(req.client, { ...b, source: 'manuel' }));
+}));
+api.patch('/quotes/:id', wrap(async (req, res) => {
+  const id = Number(req.params.id), b = req.body || {};
+  const cur = await one(`SELECT ${QUOTE_FIELDS} FROM quotes WHERE id = $1 AND client_id = $2`, [id, req.client.id]);
+  if (!cur) return res.status(404).json({ error: 'Devis introuvable' });
+  if (Object.keys(b).length === 1 && b.status) {
+    const st = b.status;
+    if (!['a_valider', 'envoye', 'accepte', 'refuse'].includes(st)) return res.status(400).json({ error: 'Statut invalide' });
+    return res.json(await one(`UPDATE quotes SET status = $2, updated_at = NOW(),
+        sent_at = CASE WHEN $2 = 'envoye' THEN COALESCE(sent_at, NOW()) ELSE sent_at END,
+        accepted_at = CASE WHEN $2 = 'accepte' THEN NOW() WHEN $2 = 'a_valider' THEN NULL ELSE accepted_at END,
+        refused_at = CASE WHEN $2 = 'refuse' THEN NOW() WHEN $2 = 'a_valider' THEN NULL ELSE refused_at END
+      WHERE id = $1 RETURNING ${QUOTE_FIELDS}`, [id, st]));
+  }
+  res.json(await saveQuote(req.client, { ...cur, ...b }, id));
+}));
+api.delete('/quotes/:id', wrap(async (req, res) => {
+  await q('DELETE FROM quotes WHERE id = $1 AND client_id = $2', [Number(req.params.id), req.client.id]);
+  res.json({ ok: true });
+}));
+// Aperçu tel que le client le verra (le bouton « Accepter » y est inactif tant que le devis n'est pas envoyé)
+api.get('/quotes/:id/apercu', wrap(async (req, res) => {
+  const qt = await one(`SELECT ${QUOTE_FIELDS} FROM quotes WHERE id = $1 AND client_id = $2`, [Number(req.params.id), req.client.id]);
+  if (!qt) return res.status(404).send('Devis introuvable');
+  res.set('Cache-Control', 'no-store').type('html').send(quotePage(req.client, { ...qt, status: qt.status === 'a_valider' ? 'apercu' : qt.status }));
+}));
+api.post('/quotes/:id/send', wrap(async (req, res) => {
+  const qt = await one(`SELECT ${QUOTE_FIELDS} FROM quotes WHERE id = $1 AND client_id = $2`, [Number(req.params.id), req.client.id]);
+  if (!qt) return res.status(404).json({ error: 'Devis introuvable' });
+  if (!(qt.lines || []).length) return res.status(400).json({ error: 'Le devis est vide' });
+  const r = await sendQuoteEmail(req.client, qt, settingsOf(req.client));
+  if (!r.ok) return res.status(422).json({ error: r.error });
+  res.json(await one(`UPDATE quotes SET status = CASE WHEN status = 'a_valider' THEN 'envoye' ELSE status END, sent_at = NOW(), updated_at = NOW()
+    WHERE id = $1 RETURNING ${QUOTE_FIELDS}`, [qt.id]));
+}));
+
 app.use('/api', api);
+
+// ---------- Page publique du devis (lien envoyé au client) ----------
+async function publicQuote(token) {
+  const qt = await one(`SELECT ${QUOTE_FIELDS}, client_id FROM quotes WHERE token = $1`, [String(token || '')]);
+  if (!qt) return null;
+  const client = await one('SELECT * FROM clients WHERE id = $1 AND active', [qt.client_id]);
+  return client ? { qt, client } : null;
+}
+const notFound = (res) => res.status(404).type('html').send('<!doctype html><meta charset="utf-8"><p style="font-family:sans-serif;padding:40px">Ce devis est introuvable.</p>');
+app.get('/d/:token', wrap(async (req, res) => {
+  const r = await publicQuote(req.params.token);
+  if (!r || r.qt.status === 'a_valider') return notFound(res);
+  res.set('Cache-Control', 'no-store').type('html').send(quotePage(r.client, r.qt, { justAccepted: req.query.ok === '1' }));
+}));
+app.post('/d/:token/accepter', wrap(async (req, res) => {
+  const r = await publicQuote(req.params.token);
+  if (!r || r.qt.status === 'a_valider') return notFound(res);
+  if (r.qt.status === 'envoye' && !(r.qt.valid_until && new Date(r.qt.valid_until + 'T23:59:59') < new Date())) {
+    await q(`UPDATE quotes SET status = 'accepte', accepted_at = NOW(), updated_at = NOW() WHERE id = $1`, [r.qt.id]);
+  }
+  res.redirect(303, `/d/${encodeURIComponent(req.params.token)}?ok=1`);
+}));
 
 // ---------- Admin ----------
 const admin = express.Router();
