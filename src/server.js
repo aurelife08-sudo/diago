@@ -229,9 +229,24 @@ api.get('/calls/:id', wrap(async (req, res) => {
   c.quote = await one('SELECT id, number, status, total_ttc FROM quotes WHERE call_id = $1 ORDER BY id DESC LIMIT 1', [c.id]);
   res.json(c);
 }));
+// Mission ajoutée à la main (RDV pris directement par le diagnostiqueur, appel reçu hors agent…)
+api.post('/calls', wrap(async (req, res) => {
+  const b = req.body || {};
+  const name = String(b.name || '').trim().slice(0, 120);
+  if (!name) return res.status(400).json({ error: 'Nom du client obligatoire' });
+  const diag = Array.isArray(b.diagnostics) ? b.diagnostics.join(', ') : (b.diagnostics || null);
+  const call = await one(
+    `INSERT INTO calls (client_id, provider, provider_call_id, caller_name, caller_number, summary, next_action, request_type, urgency, status, address, diagnostics, callback_before)
+     VALUES ($1, 'manuel', $2, $3, $4, $5, $6, 'rendez_vous', $7, $8, $9, $10, $11) RETURNING *`,
+    [req.client.id, `manuel-${crypto.randomUUID()}`, name, b.phone ? normNumber(b.phone) : null,
+      String(b.summary || '').trim().slice(0, 600) || (b.rdv ? 'Rendez-vous fixé directement par le diagnostiqueur.' : 'Mission ajoutée par le diagnostiqueur.'), b.rdv ? 'Faire la visite.' : 'Rappeler le client.',
+      ['haute', 'moyenne', 'basse'].includes(b.urgency) ? b.urgency : 'moyenne', b.rdv ? 'rdv_pris' : 'a_rappeler',
+      String(b.address || '').trim().slice(0, 300) || null, diag, b.callback_before ? String(b.callback_before).slice(0, 80) : null]);
+  res.status(201).json(call);
+}));
 api.patch('/calls/:id', wrap(async (req, res) => {
   const status = req.body?.status;
-  if (!['a_rappeler', 'rappele', 'rdv_pris', 'termine'].includes(status)) return res.status(400).json({ error: 'Statut invalide' });
+  if (!['a_rappeler', 'rdv_pris', 'termine'].includes(status)) return res.status(400).json({ error: 'Statut invalide' });
   const r = await one('UPDATE calls SET status = $3 WHERE id = $1 AND client_id = $2 RETURNING id, status', [Number(req.params.id), req.client.id, status]);
   if (!r) return res.status(404).json({ error: 'Appel introuvable' });
   res.json(r);
@@ -289,6 +304,8 @@ api.patch('/appointments/:id', wrap(async (req, res) => {
   const body = req.body || {};
   if (Object.keys(body).length === 1 && 'done' in body) {
     const row = await one(`UPDATE appointments SET done = $2, done_at = CASE WHEN $2 THEN NOW() ELSE NULL END WHERE id = $1 RETURNING ${APPT_FIELDS}`, [id, !!body.done]);
+    // Visite terminée → la mission liée passe dans « Terminés » (et revient en « RDV pris » si on annule)
+    if (row.call_id) await q('UPDATE calls SET status = $3 WHERE id = $1 AND client_id = $2', [row.call_id, req.client.id, body.done ? 'termine' : 'rdv_pris']);
     return res.json(row);
   }
   const v = await apptValues(body, cur);

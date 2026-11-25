@@ -69,6 +69,7 @@ export async function migrate() {
     ALTER TABLE clients ADD COLUMN IF NOT EXISTS telnyx_assistant_id TEXT;
     ALTER TABLE clients ADD COLUMN IF NOT EXISTS quote_settings JSONB;
     CREATE INDEX IF NOT EXISTS calls_client_idx ON calls (client_id, started_at DESC);
+    UPDATE calls SET status = 'rdv_pris' WHERE status = 'rappele';
 
     CREATE TABLE IF NOT EXISTS appointments (
       id            SERIAL PRIMARY KEY,

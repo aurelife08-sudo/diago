@@ -29,7 +29,8 @@
   // ---------- Libellés ----------
   const TYPE = { devis: 'Devis', rendez_vous: 'Rendez-vous', urgence: 'Urgence', information: 'Information', suivi: 'Suivi', autre: 'Appel' };
   const URG = { haute: 'Urgent', moyenne: 'Normal', basse: 'Pas pressé' };
-  const STATUS = { a_rappeler: 'À rappeler', rappele: 'Rappelé', rdv_pris: 'RDV pris', termine: 'Terminé' };
+  const STATUS = { a_rappeler: 'À rappeler', rdv_pris: 'RDV pris', termine: 'Terminé' };
+  const NEXT = { a_rappeler: 'rdv_pris', rdv_pris: 'termine' };
   const DIAGS = { DPE: 45, Amiante: 45, Plomb: 30, 'Électricité': 30, Gaz: 30, Termites: 20, Carrez: 15, Boutin: 15, ERP: 5, 'Audit énergétique': 90 };
 
   // ---------- Formats ----------
@@ -121,6 +122,7 @@
     return state.calls.filter((c) => {
       if (state.filter === 'urgent' && !(c.urgency === 'haute' && c.status === 'a_rappeler')) return false;
       if (STATUS[state.filter] && c.status !== state.filter) return false;
+      if (state.filter === 'all' && c.status === 'termine') return false; // les missions terminées ne restent que dans « Terminés »
       if (q && ![c.caller_name, c.caller_number, c.summary, c.address, c.diagnostics].some((v) => (v || '').toLowerCase().includes(q))) return false;
       return true;
     });
@@ -132,7 +134,7 @@
   function renderCalls() {
     const list = visibleCalls(), el = $('#callList');
     if (!list.length) {
-      el.innerHTML = `<div class="card empty"><b>${state.calls.length ? 'Aucun appel ici' : 'Aucun appel pour le moment'}</b>${state.calls.length ? 'Essayez un autre filtre.' : 'Les appels que vous ne pouvez pas prendre arriveront ici, résumés et triés.'}</div>`;
+      el.innerHTML = `<div class="card empty"><b>${state.calls.length ? 'Aucune mission ici' : 'Aucun appel pour le moment'}</b>${state.calls.length ? 'Essayez un autre filtre.' : 'Les appels que vous ne pouvez pas prendre arriveront ici, résumés et triés.'}</div>`;
       return;
     }
     el.innerHTML = list.map((c) => `
@@ -148,9 +150,9 @@
           ${c.status !== 'a_rappeler' ? `<span class="tag ${c.status === 'rdv_pris' ? 'leaf' : ''}">${STATUS[c.status]}</span>` : ''}
           ${c.quote_id ? `<span class="tag green">Devis ${eur(c.quote_total)}${c.quote_status === 'accepte' ? ' · accepté' : ''}</span>` : ''}
         </div>
-        ${c.status === 'a_rappeler' ? `<div class="actions">
+        ${NEXT[c.status] ? `<div class="actions">
           ${c.caller_number ? `<a class="btn primary sm" href="tel:${esc(c.caller_number)}" data-stop>${ic('phone')}Rappeler</a>` : ''}
-          <button class="btn sm" data-quick="rappele" data-stop>${ic('check')}Fait</button>
+          <button class="btn sm" data-quick="${NEXT[c.status]}" data-stop>${ic('check')}Fait</button>
         </div>` : ''}
       </article>`).join('');
   }
@@ -183,7 +185,7 @@
     await api(`/calls/${id}`, { method: 'PATCH', body: { status } });
     const c = state.calls.find((x) => x.id === id); if (c) c.status = status;
     renderCalls(); loadStats().catch(() => {});
-    toast(`Marqué « ${STATUS[status]} »`);
+    toast(status === 'rdv_pris' ? 'Passé dans « RDV pris »' : status === 'termine' ? 'Mission terminée' : `Marqué « ${STATUS[status]} »`);
   }
 
   async function openCall(id) {
@@ -240,6 +242,58 @@
   $$('.stat[data-filter]').forEach((b) => b.addEventListener('click', () => setFilter(b.dataset.filter)));
   $('#search').addEventListener('input', (e) => { state.q = e.target.value; renderCalls(); });
 
+
+  // ---------- Mission ajoutée à la main ----------
+  function openMissionForm() {
+    let rdv = false;
+    openSheet('Nouvelle mission', 'Un client qui vous a appelé directement', `
+      <form class="form" id="mForm" autocomplete="off">
+        <div class="card group">
+          <label class="field"><span>Client *</span><input name="cname" required placeholder="Nom du client ou de l'agence" /></label>
+          <label class="field"><span>Téléphone</span><input name="phone" type="tel" inputmode="tel" placeholder="06 12 34 56 78" /></label>
+          <label class="field"><span>Adresse du bien</span><input name="address" placeholder="Numéro, rue, ville" /><div class="sugg" hidden></div></label>
+          <div class="field"><span>Diagnostics</span><div class="chipset" id="mDiags">${Object.keys(DIAGS).map((d) => `<button type="button" class="chip" data-d="${esc(d)}">${esc(d)}</button>`).join('')}</div></div>
+          <label class="field"><span>Note</span><textarea name="summary" placeholder="Ce que veut le client, délai, infos utiles…"></textarea></label>
+        </div>
+        <div class="card group">
+          <div class="field"><span>Rendez-vous</span><div class="seg" id="mRdv"><button type="button" class="on" data-v="0">À rappeler</button><button type="button" data-v="1">RDV déjà fixé</button></div></div>
+          <div id="mWhen" hidden>
+            <div class="field mini"><label><span>Date</span><input name="day" type="date" value="${esc(state.day >= todayIso() ? state.day : todayIso())}" /></label><label><span>Heure</span><input name="time" type="time" step="900" value="09:00" /></label></div>
+          </div>
+        </div>
+        <button type="submit" class="btn primary block">Ajouter la mission</button>
+      </form>`);
+    const f = $('#mForm');
+    autocomplete(f.address);
+    $('#mDiags').addEventListener('click', (e) => { const b = e.target.closest('[data-d]'); if (b) b.classList.toggle('on'); });
+    $('#mRdv').addEventListener('click', (e) => {
+      const b = e.target.closest('[data-v]'); if (!b) return;
+      rdv = b.dataset.v === '1';
+      $$('#mRdv button').forEach((x) => x.classList.toggle('on', x === b));
+      $('#mWhen').hidden = !rdv;
+    });
+    f.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const btn = f.querySelector('[type=submit]');
+      const diags = $$('#mDiags .chip.on').map((x) => x.dataset.d);
+      if (rdv && (!f.address.value.trim() || !f.day.value || fromTime(f.time.value) == null)) { toast("Pour un RDV : adresse, date et heure"); return; }
+      btn.disabled = true;
+      try {
+        const call = await api('/calls', { method: 'POST', body: { name: f.cname.value, phone: f.phone.value, address: f.address.value, diagnostics: diags, summary: f.summary.value, rdv } });
+        state.known.add(call.id);
+        if (rdv) {
+          const t = fromTime(f.time.value);
+          const body = { call_id: call.id, day: f.day.value, name: f.cname.value, phone: f.phone.value, address: f.address.value, diagnostics: diags, duration_min: suggestDuration(diags), win_start: t, win_end: t, notes: f.summary.value };
+          if (f.address.dataset.lat) { body.lat = Number(f.address.dataset.lat); body.lon = Number(f.address.dataset.lon); }
+          await api('/appointments', { method: 'POST', body });
+        }
+        closeSheet(); toast(rdv ? 'Mission ajoutée, RDV dans la tournée' : 'Mission ajoutée');
+        state.filter = rdv ? 'rdv_pris' : 'a_rappeler'; setFilter(state.filter);
+        await loadCalls({ silent: true });
+      } catch (err) { toast(err.message); btn.disabled = false; }
+    });
+  }
+  $('#newMission').addEventListener('click', () => openMissionForm());
   // =====================================================================
   // ADRESSES (autocomplétion)
   // =====================================================================
@@ -339,7 +393,7 @@
     });
     $('#apUndo')?.addEventListener('click', async () => {
       await api(`/appointments/${appt.id}`, { method: 'PATCH', body: { done: false } });
-      closeSheet(); loadRoute();
+      closeSheet(); loadRoute(); loadCalls({ silent: true }).catch(() => {});
     });
     f.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -548,6 +602,7 @@
       d.disabled = true;
       await api(`/appointments/${d.dataset.done}`, { method: 'PATCH', body: { done: true } }).catch((err) => toast(err.message));
       await loadRoute();
+      loadCalls({ silent: true }).catch(() => {});
       $('.guide')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
   });
