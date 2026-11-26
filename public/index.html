@@ -16,6 +16,7 @@
   <link rel="stylesheet" href="/app.css" />
 </head>
 <body>
+  <div class="splash" id="splash" aria-hidden="true"></div>
   <svg width="0" height="0" style="position:absolute" aria-hidden="true">
     <symbol id="i-phone" viewBox="0 0 24 24"><path d="M6.6 10.8a15 15 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25c1.1.37 2.3.57 3.6.57a1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.25.2 2.45.57 3.57a1 1 0 0 1-.25 1z"/></symbol>
     <symbol id="i-route" viewBox="0 0 24 24"><circle cx="6" cy="18" r="2.2"/><circle cx="18" cy="6" r="2.2"/><path d="M8.2 18H15a3 3 0 0 0 0-6H9a3 3 0 0 1 0-6h6.8"/></symbol>
@@ -145,24 +146,11 @@
     </section>
   </div>
 
-  <!-- Filtre de distorsion « liquid glass » (réfraction du fond sous la barre) -->
-  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
-    <filter id="lg-distort" x="0%" y="0%" width="100%" height="100%" filterUnits="objectBoundingBox">
-      <feTurbulence type="fractalNoise" baseFrequency="0.008 0.012" numOctaves="1" seed="7" result="noise" />
-      <feComponentTransfer in="noise" result="map"><feFuncR type="gamma" amplitude="1" exponent="10" offset="0.5" /><feFuncG type="gamma" amplitude="0" exponent="1" offset="0" /><feFuncB type="gamma" amplitude="0" exponent="1" offset="0.5" /></feComponentTransfer>
-      <feGaussianBlur in="noise" stdDeviation="3" result="softMap" />
-      <feSpecularLighting in="softMap" surfaceScale="5" specularConstant="1" specularExponent="100" lighting-color="white" result="specLight"><fePointLight x="-200" y="-200" z="300" /></feSpecularLighting>
-      <feComposite in="specLight" operator="arithmetic" k1="0" k2="1" k3="1" k4="0" result="litImage" />
-      <feDisplacementMap in="SourceGraphic" in2="softMap" scale="70" xChannelSelector="R" yChannelSelector="G" />
-    </filter>
-  </svg>
-  <nav class="tabbar" id="tabbar" hidden aria-label="Sections">
-    <span class="lg-effect" aria-hidden="true"></span><span class="lg-tint" aria-hidden="true"></span><span class="lg-shine" aria-hidden="true"></span>
-    <span class="lens" id="lens" aria-hidden="true"></span>
-    <button class="tab on" data-view="calls"><svg class="i"><use href="#i-phone"/></svg>Appels<span class="badge" id="badge" hidden></span></button>
-    <button class="tab" data-view="quotes"><svg class="i"><use href="#i-doc"/></svg>Devis<span class="badge" id="qBadge" hidden></span></button>
-    <button class="tab" data-view="route"><svg class="i"><use href="#i-route"/></svg>Tournée</button>
-    <button class="tab" data-view="settings"><svg class="i"><use href="#i-gear"/></svg>Réglages</button>
+  <nav id="tabbar" hidden aria-label="Sections">
+    <button class="tab nimbus-item" data-view="calls" data-fx="wave" aria-label="Appels"><span class="nv-ico"><svg class="i"><use href="#i-phone"/></svg></span><span class="nimbus-label">Appels</span><span class="badge" id="badge" hidden></span></button>
+    <button class="tab nimbus-item" data-view="quotes" data-fx="drop" aria-label="Devis"><span class="nv-ico"><svg class="i"><use href="#i-doc"/></svg></span><span class="nimbus-label">Devis</span><span class="badge" id="qBadge" hidden></span></button>
+    <button class="tab nimbus-item" data-view="route" data-fx="plane" aria-label="Tournée"><span class="nv-ico"><svg class="i"><use href="#i-route"/></svg></span><span class="nimbus-label">Tournée</span></button>
+    <button class="tab nimbus-item" data-view="settings" data-fx="spin" aria-label="Réglages"><span class="nv-ico"><svg class="i"><use href="#i-gear"/></svg></span><span class="nimbus-label">Réglages</span></button>
   </nav>
 
   <div class="overlay" id="overlay" hidden></div>
@@ -177,6 +165,7 @@
   <div class="toast" id="toast" role="status" hidden></div>
 
   <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js" defer></script>
+  <script src="/liquid.js" defer></script>
   <script src="/app.js" defer></script>
 </body>
 </html>

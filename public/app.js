@@ -127,6 +127,7 @@
 
   function showGate(msg) {
     $('#app').hidden = true; $('#tabbar').hidden = true; $('#gate').hidden = false;
+    window.DiagoUI && DiagoUI.hideSplash();
     if (msg) $('#gateMsg').textContent = msg;
   }
 
@@ -136,22 +137,13 @@
     state.view = view;
     for (const v of ['calls', 'quotes', 'route', 'settings']) $(`#v-${v}`).hidden = v !== view;
     $$('.tab').forEach((b) => b.classList.toggle('on', b.dataset.view === view));
-    moveLens();
+    window.DiagoUI && DiagoUI.setTab(view);
     if (!/^#call-/.test(location.hash) || view !== 'calls') history.replaceState(null, '', HASH[view]);
     if (view === 'route') loadRoute();
     if (view === 'quotes') loadQuotes().catch((err) => toast(err.message));
     if (view === 'settings') fillSettings();
     window.scrollTo({ top: 0 });
   }
-  // Lentille de verre qui glisse sous l'onglet actif
-  function moveLens() {
-    const t = $('.tab.on'), lens = $('#lens');
-    if (!t || !lens || !t.offsetWidth) return;
-    lens.style.width = `${t.offsetWidth}px`;
-    lens.style.transform = `translateX(${t.offsetLeft}px)`;
-    requestAnimationFrame(() => lens.classList.add('ready'));
-  }
-  window.addEventListener('resize', moveLens);
   $('#tabbar').addEventListener('click', (e) => { const b = e.target.closest('[data-view]'); if (b) show(b.dataset.view); });
   $('#refreshBtn').addEventListener('click', async () => {
     if (state.view === 'route') await loadRoute(); else if (state.view === 'quotes') await loadQuotes({ silent: true }); else await loadCalls({ silent: true });
@@ -1013,7 +1005,7 @@
   (async () => {
     if (!token) return showGate();
     $('#app').hidden = false; $('#tabbar').hidden = false;
-    requestAnimationFrame(moveLens);
+    window.DiagoUI && DiagoUI.initNav();
     try {
       state.me = await api('/me');
       $('#clientName').textContent = state.me.name;
