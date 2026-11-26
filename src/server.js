@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 // Diago — serveur : webhooks de l'agent vocal, API de l'app, admin.
 import express from 'express';
 import crypto from 'node:crypto';
@@ -31,7 +32,14 @@ app.get('/manifest.webmanifest', (req, res) => {
     icons: [{ src: '/icon-512.png', sizes: '512x512', type: 'image/png' }, { src: '/icon-180.png', sizes: '180x180', type: 'image/png' }],
   }));
 });
-app.use(express.static(path.join(ROOT, 'public'), { extensions: ['html'], maxAge: '5m' }));
+// Page de l'app : le lien du cabinet est écrit directement dans le manifeste (sans attendre le JS)
+const INDEX_HTML = fs.readFileSync(path.join(ROOT, 'public', 'index.html'), 'utf8');
+app.get(['/', '/index.html'], (req, res) => {
+  const t = typeof req.query.t === 'string' && /^[\w-]{8,64}$/.test(req.query.t) ? req.query.t : '';
+  res.set('cache-control', 'no-store').type('html')
+    .send(t ? INDEX_HTML.replace('href="/manifest.webmanifest"', `href="/manifest.webmanifest?t=${t}"`) : INDEX_HTML);
+});
+app.use(express.static(path.join(ROOT, 'public'), { extensions: ['html'], maxAge: 0, etag: true }));
 
 const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 const today = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Paris' }).format(new Date());

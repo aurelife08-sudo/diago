@@ -125,6 +125,13 @@
     $('#overlay').hidden = true; $('#sheet').hidden = true; state.callId = null;
     if (/^#call-/.test(location.hash)) history.replaceState(null, '', location.pathname + location.search);
   }
+  // Écran sans lien : on peut coller son lien (ou juste le code) pour se connecter
+  $('#gateForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const v = $('#gateInput').value.trim(), m = v.match(/[?&]t=([\w-]+)/) || v.match(/^([\w-]{8,64})$/);
+    if (!m) return toast('Lien non reconnu');
+    location.href = `/?t=${encodeURIComponent(m[1])}`;
+  });
   $('#overlay').addEventListener('click', closeSheet);
   $('#shClose').addEventListener('click', closeSheet);
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('#sheet').hidden) closeSheet(); });
