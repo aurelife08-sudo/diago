@@ -47,7 +47,11 @@
     if (token) localStorage.setItem('diago_token', token);
     else token = localStorage.getItem('diago_token');
   } catch {}
-  if (params.get('t')) history.replaceState(null, '', location.pathname + location.hash);
+  // On garde ?t= dans l'adresse et dans le manifeste : l'icône de l'écran d'accueil (iPhone) rouvre alors le bon cabinet
+  if (token) {
+    if (!params.get('t')) history.replaceState(null, '', `${location.pathname}?t=${encodeURIComponent(token)}${location.hash}`);
+    const m = document.querySelector('link[rel=manifest]'); if (m) m.href = `/manifest.webmanifest?t=${encodeURIComponent(token)}`;
+  }
 
   async function api(path, opts = {}) {
     const res = await fetch('/api' + path, {
@@ -119,7 +123,7 @@
   }
   function closeSheet() {
     $('#overlay').hidden = true; $('#sheet').hidden = true; state.callId = null;
-    if (/^#call-/.test(location.hash)) history.replaceState(null, '', location.pathname);
+    if (/^#call-/.test(location.hash)) history.replaceState(null, '', location.pathname + location.search);
   }
   $('#overlay').addEventListener('click', closeSheet);
   $('#shClose').addEventListener('click', closeSheet);

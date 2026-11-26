@@ -22,6 +22,15 @@ const app = express();
 app.disable('x-powered-by');
 app.use(express.json({ limit: '2mb', verify: (req, res, buf) => { if (req.url.startsWith('/webhooks/')) req.rawBody = buf; } }));
 app.use((req, res, next) => { res.set('X-Content-Type-Options', 'nosniff'); next(); });
+// Manifeste avec le lien du cabinet : l'icône ajoutée à l'écran d'accueil rouvre Diago déjà connecté
+app.get('/manifest.webmanifest', (req, res) => {
+  const t = typeof req.query.t === 'string' && /^[\w-]{8,64}$/.test(req.query.t) ? req.query.t : '';
+  res.set('cache-control', 'no-store').type('application/manifest+json').send(JSON.stringify({
+    name: 'Diago', short_name: 'Diago', start_url: t ? `/?t=${t}` : '/', scope: '/', display: 'standalone',
+    background_color: '#f3f2ee', theme_color: '#f3f2ee',
+    icons: [{ src: '/icon-512.png', sizes: '512x512', type: 'image/png' }, { src: '/icon-180.png', sizes: '180x180', type: 'image/png' }],
+  }));
+});
 app.use(express.static(path.join(ROOT, 'public'), { extensions: ['html'], maxAge: '5m' }));
 
 const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
