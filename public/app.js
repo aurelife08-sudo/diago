@@ -5,6 +5,41 @@
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
   const ic = (n) => `<svg class="i" aria-hidden="true"><use href="#i-${n}"/></svg>`;
 
+  // ---------- Effets ----------
+  // Chiffres qui roulent jusqu'à leur nouvelle valeur
+  function rollTo(el, value) {
+    if (!el) return;
+    const chars = [...String(value)];
+    if (el._len !== chars.length || !el.querySelector('.roll')) {
+      el.innerHTML = `<span class="roll" aria-hidden="true">${chars.map((c) => (/\d/.test(c)
+        ? `<span class="col"><span class="strip">${'0123456789'.split('').map((d) => `<span>${d}</span>`).join('')}</span></span>`
+        : `<span class="ch">${c === ' ' || c === '\u202f' || c === '\u00a0' ? '&nbsp;' : esc(c)}</span>`)).join('')}</span><span class="sr">${esc(value)}</span>`;
+      el._len = chars.length;
+      void el.offsetWidth;
+    } else el.querySelector('.sr').textContent = value;
+    const strips = el.querySelectorAll('.strip');
+    let k = 0;
+    chars.forEach((c, i) => { if (/\d/.test(c)) { const st = strips[k++]; st.style.transitionDelay = `${i * 35}ms`; st.style.transform = `translateY(-${Number(c) * 10}%)`; } });
+  }
+  // Cartes « squelette » pendant le chargement
+  const skeletons = (n) => Array.from({ length: n }, () => `<div class="card sk" aria-hidden="true">
+      <div class="sk-row"><i class="b" style="width:8px;height:8px;border-radius:50%"></i><i class="b" style="height:14px;width:45%"></i><i class="b" style="height:10px;width:18%;margin-left:auto"></i></div>
+      <i class="b" style="height:11px;width:95%;margin:14px 0 7px"></i><i class="b" style="height:11px;width:70%"></i>
+      <div class="sk-row" style="margin-top:14px"><i class="b" style="height:20px;width:64px;border-radius:999px"></i><i class="b" style="height:20px;width:48px;border-radius:999px"></i><i class="b" style="height:20px;width:56px;border-radius:999px"></i></div>
+    </div>`).join('');
+  // Bouton dont le texte roule (état 0 → 1 → 2 via data-s)
+  function rollBtn(btn, labels) {
+    if (!btn) return;
+    btn.classList.add('rbtn');
+    btn.style.setProperty('--h', `${btn.offsetHeight || 44}px`);
+    btn.innerHTML = `<span class="stack">${labels.map((l) => `<span>${l}</span>`).join('')}</span>`;
+    btn.dataset.s = '0';
+  }
+  const SPIN = '<i class="spin" aria-hidden="true"></i>';
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  // Résumé qui apparaît mot par mot
+  const reveal = (text) => esc(text).split(' ').map((w, k) => `<span class="w" style="animation-delay:${120 + k * 40}ms">${w}</span>`).join(' ');
+
   // ---------- Accès par lien personnel (?t=...) ----------
   const params = new URLSearchParams(location.search);
   let token = params.get('t');
@@ -69,7 +104,7 @@
   const diagList = (s) => (s ? String(s).split(',').map((x) => x.trim()).filter(Boolean) : []);
 
   // ---------- État ----------
-  const state = { me: null, view: 'calls', calls: [], known: new Set(), filter: 'all', q: '', day: todayIso(), start: null, mode: 'opt', route: null, callId: null, quotes: null, qfilter: null, qsettings: null };
+  const state = { me: null, view: 'calls', calls: [], known: new Set(), filter: 'all', q: '', day: todayIso(), start: null, mode: 'opt', route: null, callId: null, quotes: null, qfilter: null, qsettings: null, reveal: new Set(), firstPaint: true, swiped: false };
 
   // ---------- Toast / feuille ----------
   let toastT;
@@ -147,10 +182,13 @@
       el.innerHTML = `<div class="card empty"><b>${state.calls.length ? 'Aucune mission ici' : 'Aucun appel pour le moment'}</b>${state.calls.length ? 'Essayez un autre filtre.' : 'Les appels que vous ne pouvez pas prendre arriveront ici, résumés et triés.'}</div>`;
       return;
     }
-    el.innerHTML = list.map((c) => `
+    const fade = state.firstPaint; state.firstPaint = false;
+    el.innerHTML = list.map((c, idx) => `
+      <div class="swipe ${state.reveal.has(c.id) ? 'newcard' : ''} ${fade ? 'fadein' : ''}" style="${fade ? `animation-delay:${idx * 70}ms` : ''}">
+      <div class="under" aria-hidden="true"><span class="l">${NEXT[c.status] ? `${ic('check')}Fait` : ''}</span><span class="r">${c.caller_number ? `Rappeler${ic('phone')}` : ''}</span></div>
       <article class="card item ${c.status === 'termine' ? 'dim' : ''}" data-id="${c.id}" tabindex="0">
         <div class="row"><span class="dot ${c.urgency}" title="${URG[c.urgency]}"></span><span class="name">${esc(c.caller_name || fmtPhone(c.caller_number))}</span>${c.appt_day ? `<span class="rdv">${ic('cal')}${rdvLabel(c.appt_day, c.appt_start)}</span>` : ''}<span class="when">${timeAgo(c.started_at)}</span></div>
-        <p class="sum">${esc(c.summary)}</p>
+        <p class="sum">${state.reveal.has(c.id) ? reveal(c.summary) : esc(c.summary)}</p>
         <div class="tags">
           ${c.urgency === 'haute' ? '<span class="tag red">Urgent</span>' : ''}
           ${c.request_type !== 'urgence' ? `<span class="tag">${TYPE[c.request_type] || 'Appel'}</span>` : ''}
@@ -164,17 +202,19 @@
           ${c.caller_number ? `<a class="btn primary sm" href="tel:${esc(c.caller_number)}" data-stop>${ic('phone')}Rappeler</a>` : ''}
           <button class="btn sm" data-quick="${NEXT[c.status]}" data-stop>${ic('check')}Fait</button>
         </div>` : ''}
-      </article>`).join('');
+      </article></div>`).join('');
+    state.reveal.clear();
   }
   async function loadStats() {
     const s = await api('/stats');
-    $('#sTodo').textContent = s.a_rappeler; $('#sUrgent').textContent = s.urgents; $('#sToday').textContent = s.aujourdhui;
+    rollTo($('#sTodo'), s.a_rappeler); rollTo($('#sUrgent'), s.urgents); rollTo($('#sToday'), s.aujourdhui);
     $('#badge').hidden = !s.a_rappeler; $('#badge').textContent = s.a_rappeler;
   }
   async function loadCalls({ silent } = {}) {
-    if (!silent && !state.calls.length) $('#callList').innerHTML = '<div class="skeleton"></div><div class="skeleton"></div>';
+    if (!silent && !state.calls.length) $('#callList').innerHTML = skeletons(3);
     const calls = await api('/calls');
     const fresh = state.known.size ? calls.filter((c) => !state.known.has(c.id)) : [];
+    fresh.forEach((c) => state.reveal.add(c.id));
     calls.forEach((c) => state.known.add(c.id));
     state.calls = calls;
     renderCalls();
@@ -241,6 +281,7 @@
   }
 
   $('#callList').addEventListener('click', (e) => {
+    if (state.swiped) { state.swiped = false; e.preventDefault(); return; }
     const card = e.target.closest('.item'); if (!card) return;
     const quick = e.target.closest('[data-quick]');
     if (quick) { e.preventDefault(); setStatus(Number(card.dataset.id), quick.dataset.quick); return; }
@@ -248,6 +289,50 @@
     openCall(Number(card.dataset.id)).catch((err) => toast(err.message));
   });
   $('#callList').addEventListener('keydown', (e) => { const c = e.target.closest('.item'); if (c && e.key === 'Enter') openCall(Number(c.dataset.id)); });
+  // Glisser une carte : à droite = Fait, à gauche = Rappeler
+  let drag = null;
+  $('#callList').addEventListener('pointerdown', (e) => {
+    const item = e.target.closest('.item');
+    if (!item || e.target.closest('a, button') || (e.pointerType === 'mouse' && e.button !== 0)) return;
+    drag = { item, wrap: item.parentElement, x0: e.clientX, y0: e.clientY, dx: 0, locked: false, id: e.pointerId };
+  });
+  $('#callList').addEventListener('pointermove', (e) => {
+    if (!drag || e.pointerId !== drag.id) return;
+    const dx = e.clientX - drag.x0, dy = e.clientY - drag.y0;
+    if (!drag.locked) {
+      if (Math.abs(dy) > 8 && Math.abs(dy) > Math.abs(dx)) { drag = null; return; }
+      if (Math.abs(dx) < 8) return;
+      drag.locked = true; drag.item.classList.add('drag'); drag.wrap.classList.add('dragging');
+      try { drag.item.setPointerCapture(e.pointerId); } catch {}
+    }
+    const c = state.calls.find((x) => x.id === Number(drag.item.dataset.id));
+    const allowR = !!NEXT[c?.status], allowL = !!c?.caller_number;
+    let x = dx;
+    if ((x > 0 && !allowR) || (x < 0 && !allowL)) x *= 0.15;
+    else if (Math.abs(x) > 110) x = Math.sign(x) * (110 + (Math.abs(x) - 110) * 0.4);
+    drag.dx = dx;
+    drag.wrap.classList.toggle('to-r', dx > 0); drag.wrap.classList.toggle('to-l', dx < 0);
+    drag.item.style.transform = `translateX(${x}px)`;
+  });
+  const endDrag = () => {
+    if (!drag) return;
+    const { item, wrap, dx, locked } = drag; drag = null;
+    if (!locked) return;
+    state.swiped = true; setTimeout(() => (state.swiped = false), 400);
+    item.classList.remove('drag');
+    const id = Number(item.dataset.id), c = state.calls.find((x) => x.id === id);
+    if (dx > 90 && NEXT[c?.status]) {
+      item.style.transform = 'translateX(110%)';
+      setTimeout(() => setStatus(id, NEXT[c.status]).catch((err) => { toast(err.message); renderCalls(); }), 220);
+      return;
+    }
+    item.style.transform = '';
+    setTimeout(() => wrap.classList.remove('dragging', 'to-r', 'to-l'), 350);
+    if (dx < -90 && c?.caller_number) location.href = `tel:${c.caller_number}`;
+  };
+  $('#callList').addEventListener('pointerup', endDrag);
+  $('#callList').addEventListener('pointercancel', endDrag);
+
   $('#chips').addEventListener('click', (e) => { const b = e.target.closest('[data-filter]'); if (b) setFilter(b.dataset.filter); });
   $$('.stat[data-filter]').forEach((b) => b.addEventListener('click', () => setFilter(b.dataset.filter)));
   $('#search').addEventListener('input', (e) => { state.q = e.target.value; renderCalls(); });
@@ -576,10 +661,10 @@
 
     body.innerHTML = `
       <div class="stats four">
-        <div class="stat card"><span class="stat-num">${len}</span><span class="stat-label">Rendez-vous</span></div>
-        <div class="stat card"><span class="stat-num">${km(cur.km)}</span><span class="stat-label">Kilomètres</span></div>
-        <div class="stat card"><span class="stat-num">${dl(cur.drive_min)}</span><span class="stat-label">Temps de route</span></div>
-        <div class="stat card"><span class="stat-num">${len ? hm(cur.back.at) : '–'}</span><span class="stat-label">Retour au cabinet</span></div>
+        <div class="stat card"><span class="stat-num" data-roll="${len}"></span><span class="stat-label">Rendez-vous</span></div>
+        <div class="stat card"><span class="stat-num" data-roll="${km(cur.km)}"></span><span class="stat-label">Kilomètres</span></div>
+        <div class="stat card"><span class="stat-num" data-roll="${dl(cur.drive_min)}"></span><span class="stat-label">Temps de route</span></div>
+        <div class="stat card"><span class="stat-num" data-roll="${len ? hm(cur.back.at) : '–'}"></span><span class="stat-label">Retour au cabinet</span></div>
       </div>
       ${banner}
       ${len ? '<div id="mapSlot"></div>' : ''}
@@ -596,6 +681,8 @@
       </div>
       <p class="note">${p.source === 'estimation' ? 'Temps de route estimés (service de trajets momentanément indisponible).' : 'Temps de route calculés sur les vraies routes, hors trafic.'} Waze ne guide que vers une destination à la fois : touchez « Visite terminée » pour passer à la suivante.</p>`;
 
+    $$('#routeBody [data-roll]').forEach((el) => rollTo(el, el.dataset.roll));
+    rollBtn($('#routeBody [data-done]'), [$('#routeBody [data-done]')?.innerHTML, `${SPIN}Enregistrement…`, `${ic('check')}Visite terminée`]);
     if (len) { $('#mapSlot').replaceWith(mapBox); drawMap(r.home, cur, byId); }
   }
 
@@ -609,8 +696,9 @@
     if (m) { state.mode = m.dataset.mode; renderRoute(); return; }
     const d = t.closest('[data-done]');
     if (d) {
-      d.disabled = true;
-      await api(`/appointments/${d.dataset.done}`, { method: 'PATCH', body: { done: true } }).catch((err) => toast(err.message));
+      d.disabled = true; d.dataset.s = '1';
+      const ok = await api(`/appointments/${d.dataset.done}`, { method: 'PATCH', body: { done: true } }).then(() => true, (err) => { toast(err.message); return false; });
+      if (ok) { d.dataset.s = '2'; await wait(750); } else d.dataset.s = '0';
       await loadRoute();
       loadCalls({ silent: true }).catch(() => {});
       $('.guide')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -637,7 +725,7 @@
 
   async function loadQuoteSettings() { state.qsettings = await api('/quote-settings'); return state.qsettings; }
   async function loadQuotes({ silent } = {}) {
-    if (!silent && !state.quotes) $('#quoteList').innerHTML = '<div class="skeleton"></div>';
+    if (!silent && !state.quotes) $('#quoteList').innerHTML = skeletons(2);
     const [list] = await Promise.all([api('/quotes'), state.qsettings ? null : loadQuoteSettings()]);
     state.quotes = list;
     const todo = list.filter((x) => x.status === 'a_valider').length;
@@ -712,7 +800,7 @@
             <div class="lines" id="qLines"></div>
             <button type="button" class="link" id="qAdd" style="align-self:flex-start">+ Ajouter une ligne</button></div>
           <div class="field mini"><label><span>Remise (%)</span><input name="discount_pct" inputmode="decimal" value="${esc(d.discount_pct ?? 0)}" /></label><label><span>TVA (%)</span><input name="tva_rate" inputmode="decimal" value="${esc(d.tva_rate ?? 20)}" /></label></div>
-          <div class="totals" id="qTotals"></div>
+          <div class="totals"><div id="qTotals"></div><div class="ttc"><span>Total TTC</span><span id="qTTC"></span></div></div>
         </div>
         <div class="card group"><label class="field"><span>Note sur le devis (visible par le client)</span><textarea name="notes" placeholder="Ex. : accès par le garage, clés chez le voisin…">${esc(d.notes || '')}</textarea></label></div>
         <div id="qAlt"></div>
@@ -741,7 +829,8 @@
       const t = qTotals(lines, f.discount_pct.value, f.tva_rate.value);
       $('#qTotals').innerHTML = `${t.disc ? `<div><span>Sous-total HT</span><span>${eur(t.sub)}</span></div><div><span>Remise ${num(f.discount_pct.value)} %</span><span>− ${eur(t.disc)}</span></div>` : ''}
         <div><span>Total HT</span><span>${eur(t.ht)}</span></div><div><span>TVA ${num(f.tva_rate.value)} %</span><span>${eur(t.tva)}</span></div>
-        <div class="ttc"><span>Total TTC</span><span>${eur(t.ttc)}</span></div>`;
+        `;
+      rollTo($('#qTTC'), eur(t.ttc));
     };
     drawLines();
     $('#qLines').addEventListener('input', (e) => {
@@ -824,16 +913,19 @@
         try { await navigator.clipboard.writeText(publicLink()); toast('Lien copié : devis marqué envoyé'); } catch { toast(publicLink()); }
       });
     };
+    rollBtn($('#qSend'), [$('#qSend').innerHTML, `${SPIN}Envoi en cours…`, `${ic('check')}Envoyé`]);
     $('#qSend').addEventListener('click', async () => {
       const b = $('#qSend'); b.disabled = true;
       try {
         if (!lines.length) { toast('Ajoutez au moins une ligne'); return; }
+        b.dataset.s = '1';
         await save();
-        if (!saved.customer_email) { showAlt("Pas d'email pour ce client : envoyez le lien autrement."); return; }
+        if (!saved.customer_email) { b.dataset.s = '0'; showAlt("Pas d'email pour ce client : envoyez le lien autrement."); return; }
         saved = await api(`/quotes/${saved.id}/send`, { method: 'POST' });
+        b.dataset.s = '2'; await wait(900);
         state.qfilter = saved.status;
         closeSheet(); loadQuotes({ silent: true }).catch(() => {}); toast(`Devis envoyé à ${saved.customer_email} · classé dans « Envoyés »`);
-      } catch (err) { if (saved) showAlt(`${err.message}. Vous pouvez l'envoyer autrement :`); else toast(err.message); }
+      } catch (err) { b.dataset.s = '0'; if (saved) showAlt(`${err.message}. Vous pouvez l'envoyer autrement :`); else toast(err.message); }
       finally { b.disabled = false; }
     });
   }
@@ -917,6 +1009,9 @@
     try {
       state.me = await api('/me');
       $('#clientName').textContent = state.me.name;
+      $('#live').hidden = false;
+      $('#live').classList.toggle('off', !state.me.agent_number);
+      $('#liveTxt').textContent = state.me.agent_number ? 'Agent actif' : 'Agent pas encore branché';
       $('#avatar').textContent = initials(state.me.name);
       document.title = `Diago · ${state.me.name}`;
       const h = location.hash;

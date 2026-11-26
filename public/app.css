@@ -297,3 +297,51 @@ audio { width: 100%; margin-top: 4px; }
   transition: transform .5s cubic-bezier(.3, 1.35, .5, 1), width .5s cubic-bezier(.3, 1.35, .5, 1); }
 .lens.ready::after { content: ""; position: absolute; inset: 0; border-radius: inherit; background: radial-gradient(60% 50% at 50% 0%, rgba(255, 255, 255, .55), transparent 70%); }
 @media (prefers-reduced-motion: reduce) { .lens, .tabbar { transition: none; } }
+
+/* ===== Effets (validés sur la démo) ===== */
+/* Chiffres qui roulent */
+.roll { display: inline-flex; overflow: hidden; line-height: 1.15; height: 1.15em; vertical-align: bottom; font-variant-numeric: tabular-nums; }
+.roll .col { display: inline-block; height: 1.15em; overflow: hidden; }
+.roll .strip { display: flex; flex-direction: column; transition: transform .9s cubic-bezier(.22, 1.4, .36, 1); }
+.roll .strip span { height: 1.15em; display: block; text-align: center; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+/* Squelette */
+.sk { padding: 16px 18px; }
+.sk-row { display: flex; gap: 10px; align-items: center; }
+.sk .b { display: block; border-radius: 8px; background: linear-gradient(90deg, rgba(31,42,61,.06) 0%, rgba(31,42,61,.06) 30%, rgba(255,255,255,.85) 50%, rgba(31,42,61,.06) 70%, rgba(31,42,61,.06) 100%); background-size: 250% 100%; animation: shimmer2 1.3s linear infinite; }
+@keyframes shimmer2 { from { background-position: 100% 0; } to { background-position: -150% 0; } }
+.fadein { animation: fadein2 .5s ease both; }
+@keyframes fadein2 { from { opacity: 0; transform: translateY(6px); } }
+/* Agent actif */
+.live { display: flex; align-items: center; gap: 7px; margin-top: 2px; font-size: 12px; font-weight: 600; color: var(--accent); }
+.pulse { position: relative; width: 8px; height: 8px; border-radius: 50%; background: #34c27a; flex: none; }
+.pulse::before, .pulse::after { content: ""; position: absolute; inset: 0; border-radius: 50%; background: #34c27a; animation: ping 1.8s cubic-bezier(0, 0, .2, 1) infinite; }
+.pulse::after { animation-delay: .9s; }
+@keyframes ping { 75%, 100% { transform: scale(3); opacity: 0; } }
+.live.off { color: var(--faint); } .live.off .pulse { background: var(--faint); } .live.off .pulse::before, .live.off .pulse::after { display: none; }
+/* Bouton à texte roulant */
+.rbtn { overflow: hidden; padding: 0 !important; align-items: flex-start !important; }
+.rbtn .stack { width: 100%; display: flex; flex-direction: column; transition: transform .5s cubic-bezier(.3, 1.4, .5, 1); }
+.rbtn .stack > span { flex: none; height: var(--h, 44px); display: flex; align-items: center; justify-content: center; gap: 7px; padding: 0 16px; }
+.rbtn[data-s="1"] .stack { transform: translateY(calc(-1 * var(--h, 44px))); }
+.rbtn[data-s="2"] .stack { transform: translateY(calc(-2 * var(--h, 44px))); }
+.rbtn[data-s="2"] { filter: saturate(1.2) brightness(1.08); }
+.spin { width: 16px; height: 16px; border-radius: 50%; border: 2px solid currentColor; border-top-color: transparent; opacity: .8; animation: sp .7s linear infinite; flex: none; }
+@keyframes sp { to { transform: rotate(360deg); } }
+/* Glisser les cartes */
+.swipe { position: relative; border-radius: var(--r); }
+.swipe .under { position: absolute; inset: 0; border-radius: var(--r); display: flex; justify-content: space-between; align-items: center; padding: 0 24px; color: #fff; font-weight: 700; font-size: 15px; opacity: 0; transition: opacity .15s; }
+.swipe .under span { display: flex; align-items: center; gap: 8px; }
+.swipe.dragging .under { opacity: 1; }
+.swipe.to-r .under { background: var(--leaf); } .swipe.to-l .under { background: var(--accent); }
+.swipe.to-r .under .r, .swipe.to-l .under .l { visibility: hidden; }
+.swipe .item { touch-action: pan-y; transition: transform .35s cubic-bezier(.2, .9, .3, 1.2); }
+.swipe.dragging .item { background: #fbfaf7; }
+.swipe .item.drag { transition: none; }
+.newcard { animation: drop .5s cubic-bezier(.2, 1.2, .3, 1); }
+@keyframes drop { from { opacity: 0; transform: translateY(-16px) scale(.97); } }
+/* Résumé qui apparaît */
+.w { display: inline-block; opacity: 0; filter: blur(8px); transform: translateY(4px); animation: wordin .55s cubic-bezier(.2, .8, .2, 1) forwards; }
+@keyframes wordin { to { opacity: 1; filter: blur(0); transform: none; } }
+@media (prefers-reduced-motion: reduce) { .w { opacity: 1; filter: none; transform: none; } .pulse::before, .pulse::after { display: none; } }
+#qTotals { display: block !important; padding: 0 !important; }
