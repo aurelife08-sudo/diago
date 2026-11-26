@@ -9,7 +9,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <meta name="apple-mobile-web-app-title" content="Diago" />
   <link rel="manifest" href="/manifest.webmanifest" />
-  <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+  <link rel="icon" href="/favicon.png" type="image/png" />
   <link rel="apple-touch-icon" href="/icon-180.png" />
   <title>Diago</title>
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" />
@@ -46,7 +46,7 @@
   <!-- Écran sans lien valide -->
   <div class="app" id="gate" hidden>
     <div class="card gate">
-      <div class="logo" style="margin:auto"><svg class="i"><use href="#i-phone"/></svg></div>
+      <img class="logo-img" src="/logo.png" alt="Diago" width="64" height="64" style="margin:auto;display:block;width:64px;height:64px;border-radius:18px" />
       <h1>Diago</h1>
       <p id="gateMsg">Ouvrez Diago avec le lien personnel reçu par email.</p>
     </div>
@@ -55,10 +55,9 @@
   <div class="app" id="app" hidden>
     <header class="top card">
       <div class="brand">
-        <div class="logo" aria-hidden="true"><svg class="i"><use href="#i-phone"/></svg></div>
+        <img class="logo-img" src="/logo.png" alt="Diago" width="44" height="44" />
         <div>
-          <div class="brand-name">Diago</div>
-          <div class="brand-sub" id="clientName">Chargement…</div>
+          <div class="brand-name" id="clientName">Chargement…</div>
           <div class="live" id="live" hidden><span class="pulse"></span><span id="liveTxt">Agent actif</span></div>
         </div>
       </div>
