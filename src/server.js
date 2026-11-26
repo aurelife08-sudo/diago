@@ -261,19 +261,20 @@ api.get('/stats', wrap(async (req, res) => {
 }));
 
 // Adresses
-api.get('/geocode', wrap(async (req, res) => res.json(await geocode(String(req.query.q || ''), 5))));
+const nearOf = (c) => (c.home_lat != null ? { lat: c.home_lat, lon: c.home_lon } : null);
+api.get('/geocode', wrap(async (req, res) => res.json(await geocode(String(req.query.q || ''), 5, nearOf(req.client)))));
 
 // Rendez-vous
 const APPT_FIELDS = 'id, call_id, day, name, phone, address, lat, lon, diagnostics, duration_min, win_start, win_end, notes, done, done_at, created_at';
 const minOrNull = (v) => (v === null || v === undefined || v === '' ? null : Math.max(0, Math.min(1439, Math.round(Number(v)))));
 
-async function apptValues(body, existing = {}) {
+async function apptValues(body, existing = {}, near = null) {
   const b = { ...existing, ...body };
   if (!isDay(String(b.day))) throw Object.assign(new Error('Date invalide'), { status: 400 });
   if (!String(b.name || '').trim() || !String(b.address || '').trim()) throw Object.assign(new Error('Nom et adresse obligatoires'), { status: 400 });
   let { lat, lon, address } = b;
   if (body.address !== undefined && (body.lat == null || body.lon == null) && (body.address !== existing.address || existing.lat == null)) {
-    const [g] = await geocode(String(b.address), 1);
+    const [g] = await geocode(String(b.address), 1, near);
     lat = g?.lat ?? null; lon = g?.lon ?? null; address = g?.label ?? String(b.address).trim();
   }
   const diag = Array.isArray(b.diagnostics) ? b.diagnostics.join(', ') : (b.diagnostics || null);
@@ -288,7 +289,7 @@ api.get('/appointments', wrap(async (req, res) => {
   res.json(await all(`SELECT ${APPT_FIELDS} FROM appointments WHERE client_id = $1 AND day = $2 ORDER BY created_at`, [req.client.id, day]));
 }));
 api.post('/appointments', wrap(async (req, res) => {
-  const v = await apptValues(req.body || {});
+  const v = await apptValues(req.body || {}, {}, nearOf(req.client));
   const callId = req.body?.call_id ? Number(req.body.call_id) : null;
   if (callId && !(await one('SELECT 1 FROM calls WHERE id = $1 AND client_id = $2', [callId, req.client.id]))) return res.status(400).json({ error: 'Appel inconnu' });
   const row = await one(
@@ -308,7 +309,7 @@ api.patch('/appointments/:id', wrap(async (req, res) => {
     if (row.call_id) await q('UPDATE calls SET status = $3 WHERE id = $1 AND client_id = $2', [row.call_id, req.client.id, body.done ? 'termine' : 'rdv_pris']);
     return res.json(row);
   }
-  const v = await apptValues(body, cur);
+  const v = await apptValues(body, cur, nearOf(req.client));
   const row = await one(
     `UPDATE appointments SET day=$2, name=$3, phone=$4, address=$5, lat=$6, lon=$7, diagnostics=$8, duration_min=$9, win_start=$10, win_end=$11, notes=$12
       WHERE id = $1 RETURNING ${APPT_FIELDS}`, [id, ...v]);

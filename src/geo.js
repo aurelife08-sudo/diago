@@ -2,21 +2,31 @@
 const GEOCODER = process.env.GEOCODER_URL || 'https://data.geopf.fr/geocodage/search';
 const OSRM = (process.env.OSRM_URL || 'https://router.project-osrm.org').replace(/\/$/, '');
 
-/** Suggestions d'adresses (France). */
-export async function geocode(text, limit = 5) {
+/**
+ * Suggestions d'adresses (France). Avec `near` ({lat, lon} du cabinet), les adresses proches
+ * passent devant : « 3 rue Saint-Charles » donne celle du secteur, pas celle de l'Essonne.
+ */
+export async function geocode(text, limit = 5, near = null) {
   if (!text || text.trim().length < 3) return [];
   try {
-    const url = `${GEOCODER}?q=${encodeURIComponent(text.trim())}&limit=${limit}`;
+    const bias = near && near.lat != null ? `&lat=${near.lat}&lon=${near.lon}` : '';
+    const url = `${GEOCODER}?q=${encodeURIComponent(text.trim())}&limit=${Math.max(limit, 8)}${bias}`;
     const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
-    return (data.features || []).map((f) => ({
+    let list = (data.features || []).map((f) => ({
       label: f.properties.label,
       city: f.properties.city,
       lon: f.geometry.coordinates[0],
       lat: f.geometry.coordinates[1],
       score: f.properties.score,
     }));
+    if (near && near.lat != null) {
+      list.forEach((g) => (g.km = Math.round(haversineKm(near, g))));
+      // Proche du cabinet (< 120 km) d'abord, puis par pertinence
+      list.sort((a, b) => (a.km > 120) - (b.km > 120) || b.score - a.score);
+    }
+    return list.slice(0, limit);
   } catch (err) {
     console.warn('[geo] géocodage impossible :', err.message);
     return [];

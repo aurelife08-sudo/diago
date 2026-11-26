@@ -597,6 +597,10 @@
     const byId = Object.fromEntries(r.appointments.map((a) => [a.id, a]));
     const p = r.plan, opt = p.optimized, ent = p.entered, cur = state.mode === 'opt' ? opt : ent;
     const missing = p.missing.map((id) => byId[id]);
+    // Adresse trouvée très loin du cabinet : sûrement la mauvaise ville
+    const R = Math.PI / 180;
+    const far = (a) => { const dLa = (a.lat - r.home.lat) * R, dLo = (a.lon - r.home.lon) * R; const h = Math.sin(dLa / 2) ** 2 + Math.cos(r.home.lat * R) * Math.cos(a.lat * R) * Math.sin(dLo / 2) ** 2; const k = 2 * 6371 * Math.asin(Math.sqrt(h)); return k > 80 ? Math.round(k) : 0; };
+    const farList = r.appointments.filter((a) => a.lat != null && far(a));
 
     // Bandeau de comparaison
     let banner;
@@ -644,6 +648,7 @@
               ${winTxt ? `<span class="tag amber">${winTxt}</span>` : ''}
               ${a.call_id ? '<span class="tag green">Pris par l\'agent</span>' : ''}
               ${s.late ? `<span class="tag red">${dl(s.late)} de retard</span>` : ''}
+              ${far(a) ? `<span class="tag red">Adresse à vérifier · ${far(a)} km du cabinet</span>` : ''}
               ${a.done ? '<span class="tag leaf">Fait</span>' : ''}
             </div>
             ${a.notes ? `<p class="addr" style="margin:8px 0 0">${esc(a.notes)}</p>` : ''}
@@ -672,6 +677,7 @@
         <div class="seg" id="modeSeg"><button class="${state.mode === 'opt' ? 'on' : ''}" data-mode="opt">Ordre optimisé</button><button class="${state.mode === 'ent' ? 'on' : ''}" data-mode="ent">Ordre de saisie</button></div>
         <label class="pill">Départ <select id="startSel">${startOpts.map((m) => `<option value="${m}" ${m === r.start ? 'selected' : ''}>${hm(m)}</option>`).join('')}</select></label>
       </div>
+      ${farList.length ? `<div class="banner bad">${farList.length > 1 ? 'Des adresses semblent' : 'Une adresse semble'} très loin du cabinet, sûrement la mauvaise ville : ${farList.map((a) => `<a href="#" data-edit="${a.id}" style="color:inherit;font-weight:600">${esc(a.name)} (${esc(a.address)})</a>`).join(', ')}. Touchez pour corriger : les kilomètres et temps de route seront recalculés.</div>` : ''}
       ${missing.length ? `<div class="banner bad">Adresse introuvable pour : ${missing.map((a) => `<a href="#" data-edit="${a.id}" style="color:inherit;font-weight:600">${esc(a.name)}</a>`).join(', ')}. Corrigez-la pour l'ajouter à la tournée.</div>` : ''}
       ${guide}
       <div>${stops}</div>

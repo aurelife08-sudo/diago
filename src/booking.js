@@ -111,7 +111,7 @@ export async function bookSlot(client, b) {
   if (busy.count >= MAX_PER_DAY || !fits(start, dur, busy.intervals)) {
     return { ok: false, raison: 'Ce créneau vient d\'être pris.', ...(await findSlots(client, { ...b, jour: day })) };
   }
-  const [g] = await geocode(address, 1).catch(() => []);
+  const [g] = await geocode(address, 1, client.home_lat != null ? { lat: client.home_lat, lon: client.home_lon } : null).catch(() => []);
   const notes = ['Rendez-vous pris par l\'agent téléphonique : à confirmer.', b.notes ? String(b.notes).slice(0, 600) : ''].filter(Boolean).join(' ');
   const row = await one(
     `INSERT INTO appointments (client_id, day, name, phone, address, lat, lon, diagnostics, duration_min, win_start, win_end, notes)
