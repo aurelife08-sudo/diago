@@ -107,10 +107,12 @@
         <div class="actions">
           <button class="btn primary sm" data-a="copy">Copier son lien</button>
           <a class="btn sm" href="${esc(link(c))}" target="_blank" rel="noopener">Ouvrir</a>
+          <button class="btn sm" data-a="code">Code de connexion</button>
           <button class="btn sm" data-a="test">Appel de test</button>
           <button class="btn sm" data-a="num">Changer le numéro</button>
           <button class="btn sm" data-a="telnyx">Relier l'assistant Telnyx</button>
           <button class="btn sm" data-a="relink">Nouveau lien</button>
+          <button class="btn sm" data-a="logoutall">Déconnecter ses appareils</button>
           <button class="btn sm ${c.active ? 'danger' : ''}" data-a="toggle">${c.active ? 'Désactiver' : 'Réactiver'}</button>
         </div>
       </article>`).join('') : '<div class="card empty"><b>Aucun cabinet</b>Créez le premier ci-dessus.</div>';
@@ -137,6 +139,18 @@
     const c = window._clients.find((x) => x.id === Number(b.closest('[data-id]').dataset.id));
     try {
       if (b.dataset.a === 'copy') { await navigator.clipboard.writeText(link(c)).then(() => toast('Lien copié'), () => toast(link(c))); }
+      if (b.dataset.a === 'code') {
+        const r = await api(`/clients/${c.id}/login-code`, { method: 'POST' });
+        b.closest('.cl').querySelector('.codeshow')?.remove();
+        const box = document.createElement('div');
+        box.className = 'meta codeshow'; box.style.marginTop = '10px';
+        box.innerHTML = `Code à donner au cabinet : <b style="font-size:20px;letter-spacing:4px">${esc(r.code)}</b> · valable ${r.valid_minutes} min, une seule fois`;
+        b.closest('.cl').append(box);
+      }
+      if (b.dataset.a === 'logoutall') {
+        if (!b.dataset.sure) { b.dataset.sure = 1; b.textContent = 'Confirmer la déconnexion'; return; }
+        await api(`/clients/${c.id}/logout-all`, { method: 'POST' }); toast('Tous ses appareils sont déconnectés'); load();
+      }
       if (b.dataset.a === 'test') { b.disabled = true; const r = await api(`/clients/${c.id}/test-call`, { method: 'POST' }); toast(`Appel de test créé${r.email_sent ? ' et email envoyé' : ''}`); await load(); }
       if (b.dataset.a === 'num') {
         const field = document.createElement('div');
@@ -153,7 +167,7 @@
         field.querySelector('button').onclick = async () => { try { await api(`/clients/${c.id}`, { method: 'PATCH', body: { telnyx_assistant_id: field.querySelector('input').value } }); const r = await api('/telnyx/sync', { method: 'POST' }); toast(`Assistant relié${r.added ? ` · ${r.added} appel(s) récupéré(s)` : ''}`); load(); } catch (err) { toast(err.message); } };
       }
       if (b.dataset.a === 'relink') {
-        if (!b.dataset.sure) { b.dataset.sure = 1; b.textContent = "Confirmer (l'ancien lien ne marchera plus)"; return; }
+        if (!b.dataset.sure) { b.dataset.sure = 1; b.textContent = "Confirmer (ancien lien coupé, appareils déconnectés)"; return; }
         const n = await api(`/clients/${c.id}`, { method: 'PATCH', body: { new_link: true } }); await load();
         navigator.clipboard.writeText(link(n)).then(() => toast('Nouveau lien copié'), () => toast('Nouveau lien créé'));
       }

@@ -43,9 +43,12 @@
   // ---------- Accès par lien personnel (?t=...) ----------
   const params = new URLSearchParams(location.search);
   let token = params.get('t');
+  let session = null; // session de cet appareil, obtenue avec le code à 6 chiffres
   try {
-    if (token) localStorage.setItem('diago_token', token);
-    else token = localStorage.getItem('diago_token');
+    const saved = localStorage.getItem('diago_token');
+    if (token && token !== saved) { localStorage.setItem('diago_token', token); localStorage.removeItem('diago_session'); }
+    else if (!token) token = saved;
+    session = localStorage.getItem('diago_session');
   } catch {}
   // On garde ?t= dans l'adresse et dans le manifeste : l'icône de l'écran d'accueil (iPhone) rouvre alors le bon cabinet
   if (token) {
@@ -56,10 +59,10 @@
   async function api(path, opts = {}) {
     const res = await fetch('/api' + path, {
       method: opts.method || 'GET',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${session}` },
       body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
     });
-    if (res.status === 401) { showGate("Ce lien n'est plus valide. Demandez un nouveau lien."); throw new Error('401'); }
+    if (res.status === 401) { try { localStorage.removeItem('diago_session'); } catch {} session = null; showCode(); throw new Error('401'); }
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || `Erreur ${res.status}`);
     return data;
@@ -138,9 +141,46 @@
 
   function showGate(msg) {
     $('#app').hidden = true; $('#tabbar').hidden = true; $('#gate').hidden = false;
+    $('#gateForm').hidden = false; $('#codeBox').hidden = true;
     window.DiagoUI && DiagoUI.hideSplash();
     if (msg) $('#gateMsg').textContent = msg;
   }
+
+  // ---------- Code de connexion (une fois par appareil) ----------
+  const post = async (url, body) => {
+    const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    const data = await res.json().catch(() => ({}));
+    return { ok: res.ok, status: res.status, data };
+  };
+  async function showCode() {
+    showGate('Pour protéger vos données, Diago vérifie chaque nouvel appareil.');
+    $('#gateForm').hidden = true; $('#codeBox').hidden = false;
+    const r = await post('/auth/info', { t: token }).catch(() => null);
+    if (!r) return;
+    if (!r.ok) return showGate(r.data.error || "Ce lien n'est plus valide. Demandez un nouveau lien.");
+    $('#gateMsg').textContent = `${r.data.name} : pour protéger vos données, Diago vérifie chaque nouvel appareil.`;
+    $('#codeSend').hidden = !r.data.email;
+    if (r.data.email) $('#codeSend').textContent = `Recevoir mon code (${r.data.email})`;
+  }
+  $('#codeSend').addEventListener('click', async () => {
+    const b = $('#codeSend'); b.disabled = true;
+    const r = await post('/auth/start', { t: token }).catch(() => ({ ok: false, data: { error: 'Connexion impossible' } }));
+    b.disabled = false;
+    if (!r.ok) return toast(r.data.error || 'Code non envoyé');
+    toast(`Code envoyé à ${r.data.email}`);
+    $('#codeInput').focus();
+  });
+  $('#codeForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const code = $('#codeInput').value.replace(/\D/g, '');
+    if (code.length !== 6) return toast('Le code fait 6 chiffres');
+    $('#codeOk').disabled = true;
+    const r = await post('/auth/verify', { t: token, code }).catch(() => ({ ok: false, data: { error: 'Connexion impossible' } }));
+    $('#codeOk').disabled = false;
+    if (!r.ok) { $('#codeInput').value = ''; return toast(r.data.error || 'Code incorrect'); }
+    try { localStorage.setItem('diago_session', r.data.session); } catch {}
+    location.reload();
+  });
 
   // ---------- Navigation ----------
   const HASH = { calls: '#appels', quotes: '#devis', route: '#tournee', settings: '#reglages' };
@@ -815,7 +855,7 @@
         </div>
         <div class="card group"><label class="field"><span>Note sur le devis (visible par le client)</span><textarea name="notes" placeholder="Ex. : accès par le garage, clés chez le voisin…">${esc(d.notes || '')}</textarea></label></div>
         <div id="qAlt"></div>
-        ${qt ? `<div class="two"><a class="btn" href="/api/quotes/${d.id}/apercu?t=${encodeURIComponent(token)}" target="_blank" rel="noopener">${ic('eye')}Aperçu</a>${d.call_id ? `<button type="button" class="btn" id="qCall">${ic('phone')}Voir l'appel</button>` : '<span></span>'}</div>` : ''}
+        ${qt ? `<div class="two"><a class="btn" href="/api/quotes/${d.id}/apercu?s=${encodeURIComponent(session)}" target="_blank" rel="noopener">${ic('eye')}Aperçu</a>${d.call_id ? `<button type="button" class="btn" id="qCall">${ic('phone')}Voir l'appel</button>` : '<span></span>'}</div>` : ''}
         ${qt && d.status === 'envoye' ? `<div class="section-t" style="margin:4px 6px 0">Réponse du client</div>
           <div class="two"><button type="button" class="btn primary" data-st="accepte">${ic('check')}Accepté</button><button type="button" class="btn danger" data-st="refuse">${ic('x')}Refusé</button></div>` : ''}
         ${qt && (d.status === 'accepte' || d.status === 'refuse') ? `<div class="banner ${d.status === 'refuse' ? 'bad' : ''}" style="margin:0">Devis ${QST[d.status].toLowerCase()}${d.accepted_at && d.status === 'accepte' ? ` le ${new Date(d.accepted_at).toLocaleDateString('fr-FR')}` : ''}. <button type="button" class="link" data-st="envoye">Annuler</button></div>` : ''}
@@ -1015,6 +1055,7 @@
   }
   (async () => {
     if (!token) return showGate();
+    if (!session) return showCode();
     $('#app').hidden = false; $('#tabbar').hidden = false;
     window.DiagoUI && DiagoUI.initNav();
     try {

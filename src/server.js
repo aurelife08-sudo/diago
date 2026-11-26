@@ -9,7 +9,8 @@ import { fromVapi, fromRetell, fromGeneric, normNumber } from './providers.js';
 import { fromTelnyx, listFinishedConversations } from './telnyx.js';
 import { findSlots, bookSlot, linkAgentAppointments } from './booking.js';
 import { classify } from './ai.js';
-import { sendCallEmail, sendQuoteEmail } from './email.js';
+import { sendCallEmail, sendQuoteEmail, sendLoginCode } from './email.js';
+import { migrateAuth, createCode, verifyCode, clientFromSession, revokeSessions, revokeSession, maskEmail } from './auth.js';
 import { quoteFromCall, saveQuote, listQuotes, settingsOf, cleanSettings, guessDiagnostics, buildLines, quotePage, QUOTE_FIELDS, DIAG_LIST } from './quotes.js';
 import { geocode, planDay } from './geo.js';
 
@@ -22,7 +23,15 @@ const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const app = express();
 app.disable('x-powered-by');
 app.use(express.json({ limit: '2mb', verify: (req, res, buf) => { if (req.url.startsWith('/webhooks/')) req.rawBody = buf; } }));
-app.use((req, res, next) => { res.set('X-Content-Type-Options', 'nosniff'); next(); });
+app.use((req, res, next) => {
+  res.set({
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY', // aucune page Diago (ni le devis public) ne peut être affichée dans le site de quelqu'un d'autre
+    'Content-Security-Policy': "frame-ancestors 'none'",
+    'Referrer-Policy': 'no-referrer',
+  });
+  next();
+});
 // Manifeste avec le lien du cabinet : l'icône ajoutée à l'écran d'accueil rouvre Diago déjà connecté
 app.get('/manifest.webmanifest', (req, res) => {
   const t = typeof req.query.t === 'string' && /^[\w-]{8,64}$/.test(req.query.t) ? req.query.t : '';
@@ -47,11 +56,12 @@ const isDay = (d) => /^\d{4}-\d{2}-\d{2}$/.test(d || '');
 const safeEq = (a, b) => { const x = Buffer.from(String(a)), y = Buffer.from(String(b)); return x.length === y.length && crypto.timingSafeEqual(x, y); };
 
 // ---------- Accès ----------
+// L'app s'ouvre avec une session d'appareil (obtenue avec le code à 6 chiffres), plus jamais avec le seul lien.
 async function requireClient(req, res, next) {
   try {
-    const token = req.get('authorization')?.replace(/^Bearer\s+/i, '') || req.query.t;
-    const client = token && (await one('SELECT * FROM clients WHERE token = $1 AND active', [token]));
-    if (!client) return res.status(401).json({ error: 'Lien invalide ou expiré' });
+    const session = req.get('authorization')?.replace(/^Bearer\s+/i, '') || (typeof req.query.s === 'string' ? req.query.s : '');
+    const client = await clientFromSession(session);
+    if (!client) return res.status(401).json({ error: 'Connexion requise', code_required: true });
     req.client = client;
     next();
   } catch (e) { next(e); }
@@ -74,7 +84,7 @@ function telnyxSignatureOk(req) {
 }
 function webhookOk(req) {
   if (telnyxSignatureOk(req)) return true;
-  if (!WEBHOOK_SECRET) return true;
+  if (!WEBHOOK_SECRET) return false; // sans secret configuré, on refuse tout (jamais de webhook ouvert)
   const given = req.get('x-webhook-secret') || req.get('x-vapi-secret') || req.query.secret || '';
   return safeEq(given, WEBHOOK_SECRET);
 }
@@ -203,6 +213,36 @@ app.post('/webhooks/vapi', ingest(fromVapi));
 app.post('/webhooks/retell', ingest(fromRetell));
 app.post('/webhooks/generic', ingest(fromGeneric));
 app.post('/webhooks/telnyx', ingest(fromTelnyx));
+
+// ---------- Connexion (lien du cabinet + code à 6 chiffres) ----------
+const linkClient = async (t) => (typeof t === 'string' && /^[\w-]{8,64}$/.test(t) ? one('SELECT * FROM clients WHERE token = $1 AND active', [t]) : null);
+app.post('/auth/info', wrap(async (req, res) => {
+  const c = await linkClient(req.body?.t);
+  if (!c) return res.status(404).json({ error: 'Lien invalide ou expiré. Demandez un nouveau lien à l\'équipe Diago.' });
+  res.json({ name: c.name, email: maskEmail(c.email) });
+}));
+app.post('/auth/start', wrap(async (req, res) => {
+  const c = await linkClient(req.body?.t);
+  if (!c) return res.status(404).json({ error: 'Lien invalide ou expiré. Demandez un nouveau lien à l\'équipe Diago.' });
+  if (!c.email) return res.status(422).json({ error: 'Aucun email enregistré pour ce cabinet : demandez votre code à l\'équipe Diago.' });
+  const r = await createCode(c.id);
+  if (r.error) return res.status(r.status).json({ error: r.error });
+  const sent = await sendLoginCode(c, r.code);
+  if (!sent) return res.status(502).json({ error: 'Email non envoyé. Réessayez ou demandez votre code à l\'équipe Diago.' });
+  res.json({ ok: true, email: maskEmail(c.email) });
+}));
+app.post('/auth/verify', wrap(async (req, res) => {
+  const c = await linkClient(req.body?.t);
+  if (!c) return res.status(404).json({ error: 'Lien invalide ou expiré.' });
+  const r = await verifyCode(c.id, req.body?.code);
+  if (r.error) return res.status(r.status).json({ error: r.error });
+  res.json({ session: r.session });
+}));
+app.post('/auth/logout', wrap(async (req, res) => {
+  const s = req.get('authorization')?.replace(/^Bearer\s+/i, '');
+  if (s) await revokeSession(s);
+  res.json({ ok: true });
+}));
 
 // ---------- API de l'app ----------
 const api = express.Router();
@@ -462,6 +502,7 @@ admin.patch('/clients/:id', wrap(async (req, res) => {
   const num = b.agent_number !== undefined ? normNumber(b.agent_number) : cur.agent_number;
   if (num && num !== cur.agent_number && (await one('SELECT 1 FROM clients WHERE agent_number = $1', [num]))) return res.status(409).json({ error: 'Ce numéro est déjà attribué' });
   const token = b.new_link ? crypto.randomBytes(18).toString('base64url') : cur.token;
+  if (b.new_link || b.active === false) await revokeSessions(cur.id); // nouveau lien ou cabinet désactivé → tous les appareils déconnectés
   const row = await one(
     `UPDATE clients SET name = $2, email = $3, agent_number = $4, active = $5, token = $6, trade = $7, telnyx_assistant_id = $8 WHERE id = $1 RETURNING *`,
     [cur.id, b.name?.trim() || cur.name, b.email !== undefined ? b.email?.trim() || null : cur.email, num,
@@ -487,6 +528,17 @@ admin.post('/clients/:id/test-call', wrap(async (req, res) => {
   const sent = await sendCallEmail(c, call);
   res.json({ call, email_sent: sent });
 }));
+// Code de connexion à donner au cabinet par téléphone (installation, cabinet sans email…)
+admin.post('/clients/:id/login-code', wrap(async (req, res) => {
+  const c = await one('SELECT id FROM clients WHERE id = $1', [Number(req.params.id)]);
+  if (!c) return res.status(404).json({ error: 'Cabinet introuvable' });
+  const r = await createCode(c.id, { force: true });
+  res.json({ code: r.code, valid_minutes: 10 });
+}));
+admin.post('/clients/:id/logout-all', wrap(async (req, res) => {
+  await revokeSessions(Number(req.params.id));
+  res.json({ ok: true });
+}));
 admin.post('/telnyx/sync', wrap(async (req, res) => res.json(await syncTelnyx())));
 app.use('/admin/api', admin);
 
@@ -500,6 +552,8 @@ app.use((err, req, res, next) => {
 });
 
 await migrate();
+await migrateAuth();
+if (!WEBHOOK_SECRET && !TELNYX_PUBLIC_KEY) console.warn('[sécurité] WEBHOOK_SECRET et TELNYX_PUBLIC_KEY absents : tous les webhooks seront refusés.');
 app.listen(PORT, () => console.log(`Diago prêt sur le port ${PORT}`));
 const POLL = Math.max(30, Number(process.env.TELNYX_POLL_SECONDS) || 60) * 1000;
 if (process.env.TELNYX_API_KEY) { setTimeout(syncTelnyx, 5000); setInterval(syncTelnyx, POLL).unref(); }

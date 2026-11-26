@@ -54,6 +54,14 @@
         <input id="gateInput" class="field" placeholder="Collez votre lien Diago" autocomplete="off" autocapitalize="off" spellcheck="false" style="height:46px;border-radius:14px;border:0;padding:0 14px;background:rgba(118,118,128,.12);font:inherit" />
         <button class="btn primary" type="submit">Ouvrir mon Diago</button>
       </form>
+      <div id="codeBox" hidden style="margin-top:14px;display:flex;flex-direction:column;gap:10px">
+        <button class="btn primary" type="button" id="codeSend">Recevoir mon code par email</button>
+        <form id="codeForm" style="display:flex;flex-direction:column;gap:10px">
+          <input id="codeInput" class="field" placeholder="••••••" inputmode="numeric" autocomplete="one-time-code" maxlength="7" style="height:52px;border-radius:14px;border:0;padding:0 14px;background:rgba(118,118,128,.12);font:inherit;font-size:22px;letter-spacing:6px;text-align:center" />
+          <button class="btn" type="submit" id="codeOk">Valider</button>
+        </form>
+        <p style="font-size:13px">Un code vous a été donné par l'équipe Diago ? Saisissez-le directement.</p>
+      </div>
     </div>
   </div>
 

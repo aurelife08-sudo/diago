@@ -17,6 +17,8 @@ const STEP = 30;        // créneaux toutes les 30 min
 const TRAVEL = 30;      // marge de route entre deux rendez-vous
 const MAX_PER_DAY = 6;  // rendez-vous max par jour
 const HORIZON = 15;     // jours cherchés
+const MAX_AHEAD = 60;   // l'agent ne réserve pas plus de 60 jours à l'avance
+const BURST_MAX = 4, BURST_MIN = 30; // garde-fou : au plus 4 RDV pris par l'agent en 30 min pour un cabinet
 
 export function parseDiags(v) {
   const list = Array.isArray(v) ? v.join(',') : String(v || '');
@@ -44,7 +46,7 @@ const JOURS = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 's
 function startDay(pref) {
   const today = parisToday();
   const p = String(pref || '').toLowerCase().trim();
-  if (/^\d{4}-\d{2}-\d{2}$/.test(p) && p > today) return { day: p, only: true };
+  if (/^\d{4}-\d{2}-\d{2}$/.test(p) && p > today) return p <= addDays(today, MAX_AHEAD) ? { day: p, only: true } : { day: addDays(today, 1), only: false };
   if (/apr[eè]s-demain/.test(p)) return { day: addDays(today, 2), only: true };
   if (/demain/.test(p)) return { day: addDays(today, 1), only: true };
   if (/semaine prochaine/.test(p)) { let d = addDays(today, 1); while (weekday(d) !== 1) d = addDays(d, 1); return { day: d, only: false }; }
@@ -98,12 +100,29 @@ export async function bookSlot(client, b) {
   const [, day] = m;
   const start = Number(m[2]) * 60 + Number(m[3]);
   const inHours = Object.values(BLOCKS).some(([a, z]) => start >= a && start < z);
-  if (day <= parisToday() || weekday(day) === 0 || weekday(day) === 6 || !inHours) {
+  if (day <= parisToday() || day > addDays(parisToday(), MAX_AHEAD) || weekday(day) === 0 || weekday(day) === 6 || !inHours) {
     return { ok: false, raison: 'Ce créneau est en dehors des horaires du cabinet.', ...(await findSlots(client, b)) };
   }
   const name = String(b.nom || '').trim();
   const address = String(b.adresse || '').trim();
   if (!name || !address) return { ok: false, raison: 'Il manque le nom ou l\'adresse du bien : demande-les avant de réserver.' };
+
+  // Un appelant ne peut pas remplir l'agenda : un seul RDV à venir par numéro, et un plafond par cabinet
+  const phone = normNumber(b.telephone) || null;
+  const callback = 'Dis au client que le diagnostiqueur le rappellera pour ce rendez-vous supplémentaire. Ne réserve rien d\'autre.';
+  if (phone) {
+    const prev = await one(
+      `SELECT day, win_start FROM appointments WHERE client_id = $1 AND phone = $2 AND day > $3 AND NOT done
+         AND notes LIKE 'Rendez-vous pris par l''agent%' ORDER BY day LIMIT 1`, [client.id, phone, parisToday()]);
+    if (prev) return { ok: false, deja_reserve: true, raison: `Ce client a déjà un rendez-vous ${slotLabel(prev.day, prev.win_start)}.`, consigne: callback };
+  }
+  const burst = await one(
+    `SELECT COUNT(*)::int AS n FROM appointments WHERE client_id = $1 AND notes LIKE 'Rendez-vous pris par l''agent%'
+       AND created_at > NOW() - ($2 || ' minutes')::interval`, [client.id, String(BURST_MIN)]);
+  if (burst.n >= BURST_MAX) {
+    console.warn(`[rdv] plafond atteint pour ${client.name} : ${burst.n} RDV pris par l'agent en ${BURST_MIN} min`);
+    return { ok: false, raison: 'Réservation automatique momentanément indisponible.', consigne: 'Dis au client que le diagnostiqueur le rappellera rapidement pour fixer la date.' };
+  }
 
   const diags = parseDiags(b.diagnostics);
   const dur = durationFor(diags);
@@ -116,7 +135,7 @@ export async function bookSlot(client, b) {
   const row = await one(
     `INSERT INTO appointments (client_id, day, name, phone, address, lat, lon, diagnostics, duration_min, win_start, win_end, notes)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10,$11) RETURNING id`,
-    [client.id, day, name.slice(0, 120), normNumber(b.telephone) || null, (g?.label ?? address).slice(0, 300), g?.lat ?? null, g?.lon ?? null,
+    [client.id, day, name.slice(0, 120), phone, (g?.label ?? address).slice(0, 300), g?.lat ?? null, g?.lon ?? null,
       diags.join(', ') || null, dur, start, notes],
   );
   console.log(`[rdv] ${row.id} pris par l'agent pour ${client.name} : ${day} ${hm(start)}`);
