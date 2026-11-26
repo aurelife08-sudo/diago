@@ -749,10 +749,12 @@
       b.classList.toggle('on', b.dataset.q === state.qfilter);
       b.textContent = `${{ a_valider: 'À valider', envoye: 'Envoyés', accepte: 'Acceptés', refuse: 'Refusés', all: 'Tous' }[b.dataset.q]}${n ? ` · ${n}` : ''}`;
     });
-    const shown = list.filter((x) => state.qfilter === 'all' || x.status === state.qfilter);
+    const qs = (state.qq || '').trim().toLowerCase();
+    const shown = list.filter((x) => (state.qfilter === 'all' || x.status === state.qfilter)
+      && (!qs || [x.customer_name, x.customer_email, x.customer_phone, x.address, x.number, x.diagnostics, String(x.total_ttc ?? '')].some((v) => (v || '').toLowerCase().includes(qs))));
     const el = $('#quoteList');
     if (!shown.length) {
-      el.innerHTML = `<div class="card empty"><b>${list.length ? 'Aucun devis ici' : 'Aucun devis pour le moment'}</b>${list.length ? 'Essayez un autre filtre.' : "Après chaque appel pour des diagnostics, l'agent prépare un devis avec vos tarifs. Il arrive ici, à vérifier avant l'envoi."}</div>`;
+      el.innerHTML = `<div class="card empty"><b>${list.length ? 'Aucun devis ici' : 'Aucun devis pour le moment'}</b>${list.length ? (qs ? 'Aucun devis ne correspond à la recherche.' : 'Essayez un autre filtre.') : "Après chaque appel pour des diagnostics, l'agent prépare un devis avec vos tarifs. Il arrive ici, à vérifier avant l'envoi."}</div>`;
       return;
     }
     el.innerHTML = shown.map((x) => `
@@ -773,6 +775,7 @@
   $('#qChips').addEventListener('click', (e) => { const b = e.target.closest('[data-q]'); if (b) { state.qfilter = b.dataset.q; renderQuotes(); } });
   $('#qBanner').addEventListener('click', (e) => { if (e.target.closest('[data-tariffs]')) openTariffs(); });
   $('#tariffsBtn').addEventListener('click', () => openTariffs());
+  $('#qSearch').addEventListener('input', (e) => { state.qq = e.target.value; renderQuotes(); });
   $('#newQuote').addEventListener('click', () => quoteEditor(null));
 
   async function openQuote(id) { quoteEditor(await api(`/quotes/${id}`)); }
