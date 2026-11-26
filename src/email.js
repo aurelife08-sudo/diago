@@ -47,6 +47,35 @@ export async function sendCallEmail(client, call, quote = null) {
   }
 }
 
+/** Code de connexion à 6 chiffres envoyé au cabinet. Retourne true si l'email est parti. */
+export async function sendLoginCode(client, code) {
+  if (!client.email) return false;
+  const subject = `${code} — votre code de connexion Diago`;
+  const html = `<div style="font-family:-apple-system,Segoe UI,sans-serif;max-width:480px;margin:auto;color:#1f2a3d">
+    <p style="font-size:13px;color:#5d6879;margin:0 0 4px">Diago · ${esc(client.name)}</p>
+    <h2 style="margin:0 0 14px;font-size:20px">Votre code de connexion</h2>
+    <p style="font-size:34px;letter-spacing:8px;font-weight:700;background:#f3f2ee;border-radius:14px;padding:16px;text-align:center;margin:0 0 14px">${esc(code)}</p>
+    <p style="color:#5d6879;font-size:14px">Ce code est valable 10 minutes. Si vous n'avez pas demandé de code, ignorez cet email : personne ne peut ouvrir votre Diago sans lui.</p>
+  </div>`;
+  if (!KEY) {
+    console.log(`[email] (pas de clé Resend) code de connexion pour ${client.name} → ${client.email} : ${code}`);
+    return false;
+  }
+  try {
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${KEY}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ from: FROM, to: client.email.split(',').map((s) => s.trim()), subject, html }),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${await res.text()}`);
+    return true;
+  } catch (err) {
+    console.warn('[email] code de connexion non envoyé :', err.message);
+    return false;
+  }
+}
+
 /** Envoie le devis au client final. Retourne { ok } ou { ok: false, error }. */
 export async function sendQuoteEmail(client, quote, settings) {
   if (!quote.customer_email) return { ok: false, error: "Pas d'adresse email pour ce client" };

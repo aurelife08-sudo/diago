@@ -17,7 +17,7 @@ Agent téléphonique IA + appli pour cabinets (appels résumés et triés, tourn
 |---|---|---|
 | `DATABASE_URL` | oui | Base Postgres |
 | `ADMIN_KEY` | oui | Mot de passe de la page `/admin` |
-| `WEBHOOK_SECRET` | conseillé | Secret attendu dans l'en-tête `x-webhook-secret` (ou `x-vapi-secret`, ou `?secret=`) |
+| `WEBHOOK_SECRET` | **obligatoire** (sans lui, tous les webhooks sont refusés) | Secret attendu dans l'en-tête `x-webhook-secret` (ou `x-vapi-secret`, ou `?secret=`) |
 | `PUBLIC_URL` | conseillé | Adresse publique de l'app, pour le lien dans les emails |
 | `ANTHROPIC_API_KEY` | conseillé | Résumés et tri par l'IA |
 | `AI_MODEL` | non | Modèle Claude (par défaut `claude-haiku-5-5`) |
@@ -55,6 +55,7 @@ La transcription peut aussi être une liste `[{"role":"assistant","text":"…"},
 
 1. `/admin` → « Nouveau cabinet » (nom, email, numéro de l'agent, adresse du cabinet).
 2. « Copier son lien » → l'envoyer au cabinet. Sur iPhone : Safari → Partager → « Sur l'écran d'accueil ».
+   À la première ouverture sur chaque appareil, Diago demande un code à 6 chiffres : le cabinet le reçoit par email, ou vous le lui donnez au téléphone (Admin → « Code de connexion », valable 10 min). Le lien seul ne donne accès à rien : un email transféré n'ouvre pas les données du cabinet.
 3. « Appel de test » pour vérifier que tout arrive (app + email).
 4. Le cabinet renvoie ses appels manqués vers le numéro de l'agent.
 
