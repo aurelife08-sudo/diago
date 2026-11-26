@@ -668,7 +668,7 @@
       <div class="stats four">
         <div class="stat card"><span class="stat-num" data-roll="${len}"></span><span class="stat-label">Rendez-vous</span></div>
         <div class="stat card"><span class="stat-num" data-roll="${km(cur.km)}"></span><span class="stat-label">Kilomètres</span></div>
-        <div class="stat card"><span class="stat-num" data-roll="${dl(cur.drive_min)}"></span><span class="stat-label">Temps de route</span></div>
+        <div class="stat card"><span class="stat-num" data-roll="${cur.drive_min < 60 ? `${cur.drive_min} min` : `${Math.floor(cur.drive_min / 60)} h ${pad(cur.drive_min % 60)}`}"></span><span class="stat-label">Temps de route</span></div>
         <div class="stat card"><span class="stat-num" data-roll="${len ? hm(cur.back.at) : '–'}"></span><span class="stat-label">Retour au cabinet</span></div>
       </div>
       ${banner}
