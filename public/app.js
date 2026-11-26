@@ -153,7 +153,6 @@
   }
   window.addEventListener('resize', moveLens);
   $('#tabbar').addEventListener('click', (e) => { const b = e.target.closest('[data-view]'); if (b) show(b.dataset.view); });
-  $('#avatar').addEventListener('click', () => show('settings'));
   $('#refreshBtn').addEventListener('click', async () => {
     if (state.view === 'route') await loadRoute(); else if (state.view === 'quotes') await loadQuotes({ silent: true }); else await loadCalls({ silent: true });
     toast('À jour');
@@ -1018,7 +1017,6 @@
       $('#live').hidden = false;
       $('#live').classList.toggle('off', !state.me.agent_number);
       $('#liveTxt').textContent = state.me.agent_number ? 'Agent actif' : 'Agent pas encore branché';
-      $('#avatar').textContent = initials(state.me.name);
       document.title = `Diago · ${state.me.name}`;
       const h = location.hash;
       if (h === '#tournee') show('route'); else if (h === '#devis') show('quotes'); else if (h === '#reglages') show('settings'); else show('calls');
