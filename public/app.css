@@ -277,3 +277,23 @@ audio { width: 100%; margin-top: 4px; }
 @media (max-width: 420px) { .tab { font-size: 10.5px; } .qline { grid-template-columns: minmax(0, 1fr) 46px 80px 30px; } .qhead { grid-template-columns: minmax(0, 1fr) 46px 80px 30px; } }
 #qForm .sh-foot { flex-wrap: wrap; }
 #qForm .sh-foot .primary { flex: 1 1 100%; order: -1; }
+
+/* ===== Barre d'onglets « Liquid Glass » ===== */
+.tabbar { background: transparent !important; border: 0 !important; overflow: hidden; isolation: isolate;
+  box-shadow: 0 6px 6px rgba(0, 0, 0, .12), 0 0 22px rgba(0, 0, 0, .08) !important;
+  backdrop-filter: none !important; -webkit-backdrop-filter: none !important;
+  transition: transform .4s cubic-bezier(.175, .885, .32, 2.2); }
+.tabbar > .lg-effect, .tabbar > .lg-tint, .tabbar > .lg-shine { position: absolute; inset: 0; border-radius: inherit; pointer-events: none; }
+.lg-effect { z-index: 0; backdrop-filter: blur(4px) saturate(160%); -webkit-backdrop-filter: blur(4px) saturate(160%); filter: url(#lg-distort); overflow: hidden; isolation: isolate; }
+.lg-tint { z-index: 1; background: rgba(255, 255, 255, .42); }
+.lg-shine { z-index: 2; box-shadow: inset 2px 2px 1px 0 rgba(255, 255, 255, .65), inset -1px -1px 1px 1px rgba(255, 255, 255, .55); }
+.tabbar .tab { z-index: 3; background: transparent !important; box-shadow: none !important; transition: color .25s, transform .2s; }
+.tabbar .tab:active { transform: scale(.94); }
+/* Lentille qui glisse sous l'onglet actif */
+.lens { position: absolute; z-index: 2; top: 5px; bottom: 5px; left: 0; width: 0; border-radius: 999px; pointer-events: none;
+  background: rgba(255, 255, 255, .38);
+  box-shadow: inset 1.5px 1.5px 1px 0 rgba(255, 255, 255, .9), inset -1px -1px 1px 1px rgba(255, 255, 255, .6), 0 4px 14px -4px rgba(30, 60, 45, .28);
+  backdrop-filter: blur(2px) saturate(180%) brightness(1.05); -webkit-backdrop-filter: blur(2px) saturate(180%) brightness(1.05);
+  transition: transform .5s cubic-bezier(.3, 1.35, .5, 1), width .5s cubic-bezier(.3, 1.35, .5, 1); }
+.lens.ready::after { content: ""; position: absolute; inset: 0; border-radius: inherit; background: radial-gradient(60% 50% at 50% 0%, rgba(255, 255, 255, .55), transparent 70%); }
+@media (prefers-reduced-motion: reduce) { .lens, .tabbar { transition: none; } }
