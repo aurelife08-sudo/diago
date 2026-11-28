@@ -32,6 +32,8 @@
     <symbol id="i-sms" viewBox="0 0 24 24"><path d="M4 5h16v11H8l-4 4z"/></symbol>
     <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
     <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 2h-15z"/><path d="M10 20.5a2 2 0 0 0 4 0"/></symbol>
+    <symbol id="i-up" viewBox="0 0 24 24"><path d="M6 15l6-6 6 6"/></symbol>
     <symbol id="i-cal" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15.5" rx="3"/><path d="M3.5 10h17M8 3v4M16 3v4"/></symbol>
     <symbol id="i-left" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></symbol>
     <symbol id="i-right" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></symbol>
@@ -58,7 +60,7 @@
   </div>
 
   <div class="app" id="app" hidden>
-    <header class="top card">
+    <header class="top card" id="topCard">
       <div class="brand">
         <img class="logo-img" src="/logo.png" alt="Diago" width="44" height="44" />
         <div>
@@ -67,8 +69,9 @@
         </div>
       </div>
       <div class="top-actions">
-        <button class="btn icon" id="refreshBtn" aria-label="Actualiser"><svg class="i"><use href="#i-refresh"/></svg></button>
+        <button class="act-btn" id="actBtn" aria-expanded="false" aria-controls="actPanel" aria-label="Activités récentes"><svg class="i"><use href="#i-bell"/></svg><span class="act-count" id="actCount" hidden></span><svg class="i act-chev"><use href="#i-up"/></svg></button>
       </div>
+      <div class="act-panel" id="actPanel"><div><div class="act-head"><b id="actTitle">Activités</b><span id="actSub">Ce qui s'est passé récemment</span></div><div class="act-list" id="actList"></div></div></div>
     </header>
 
     <!-- APPELS -->

@@ -167,10 +167,47 @@
     window.scrollTo({ top: 0 });
   }
   $('#tabbar').addEventListener('click', (e) => { const b = e.target.closest('[data-view]'); if (b) show(b.dataset.view); });
-  $('#refreshBtn').addEventListener('click', async () => {
-    if (state.view === 'route') await loadRoute(); else if (state.view === 'quotes') await loadQuotes({ silent: true }); else await loadCalls({ silent: true });
-    toast('À jour');
-  });
+  // Activités récentes (cloche en haut à droite) : ouvrir le panneau met aussi tout à jour
+  const seenKey = () => `diago_seen_${token}`;
+  const seenAt = () => { try { return Number(localStorage.getItem(seenKey())) || Date.now() - 864e5; } catch { return Date.now() - 864e5; } };
+  function activities() {
+    const list = [];
+    for (const c of state.calls.slice(0, 30)) {
+      const who = c.caller_name || fmtPhone(c.caller_number);
+      list.push({ t: c.started_at, icon: c.appt_day ? 'cal' : 'phone', hot: c.urgency === 'haute' && c.status === 'a_rappeler',
+        title: c.appt_day ? `RDV pris : ${who}` : `${c.urgency === 'haute' ? 'Appel urgent' : 'Nouvel appel'} : ${who}`,
+        desc: c.appt_day ? `${rdvLabel(c.appt_day, c.appt_start)} · ${c.summary || ''}` : (c.summary || ''), open: () => { show('calls'); openCall(c.id); } });
+    }
+    for (const x of state.quotes || []) {
+      const who = x.customer_name || x.number;
+      if (x.status === 'accepte' && x.accepted_at) list.push({ t: x.accepted_at, icon: 'check', title: `Devis accepté : ${who}`, desc: `${x.number}${x.total_ttc != null ? ` · ${Number(x.total_ttc).toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' })}` : ''}`, open: () => { show('quotes'); openQuote(x.id); } });
+      else if (x.status === 'a_valider') list.push({ t: x.created_at, icon: 'doc', title: `Devis à valider : ${who}`, desc: x.number + (x.address ? ` · ${x.address}` : ''), open: () => { show('quotes'); openQuote(x.id); } });
+    }
+    return list.filter((a) => a.t).sort((a, b) => new Date(b.t) - new Date(a.t)).slice(0, 8);
+  }
+  function renderActivity() {
+    const acts = activities(), seen = seenAt();
+    const unread = acts.filter((a) => new Date(a.t) > seen).length;
+    $('#actCount').hidden = !unread; $('#actCount').textContent = unread;
+    $('#actTitle').textContent = unread ? `${unread} nouvelle${unread > 1 ? 's' : ''} activité${unread > 1 ? 's' : ''}` : 'Activités';
+    $('#actList').innerHTML = acts.length ? acts.map((a, i) => `
+      <button type="button" class="act-item${new Date(a.t) > seen ? ' new' : ''}" data-i="${i}" style="--d:${i * 60}ms">
+        <span class="act-ic${a.hot ? ' hot' : ''}">${ic(a.icon)}</span>
+        <span class="act-txt"><b>${esc(a.title)}</b><span>${esc(a.desc)}</span></span>
+        <span class="act-when">${timeAgo(a.t)}</span>
+      </button>`).join('') : '<p class="act-empty">Rien de nouveau pour l\'instant.</p>';
+    $('#actList').onclick = (e) => { const b = e.target.closest('[data-i]'); if (b) { toggleActivity(false); acts[+b.dataset.i].open(); } };
+  }
+  function toggleActivity(open = !$('#topCard').classList.contains('open')) {
+    $('#topCard').classList.toggle('open', open);
+    $('#actBtn').setAttribute('aria-expanded', open);
+    if (!open) { try { localStorage.setItem(seenKey(), Date.now()); } catch {} renderActivity(); return; }
+    renderActivity();
+    // On met tout à jour en ouvrant (remplace l'ancien bouton Actualiser)
+    Promise.all([loadCalls({ silent: true }), loadQuotes({ silent: true }), state.view === 'route' ? loadRoute() : null]).then(renderActivity).catch(() => {});
+  }
+  $('#actBtn').addEventListener('click', (e) => { e.stopPropagation(); toggleActivity(); });
+  document.addEventListener('click', (e) => { if ($('#topCard').classList.contains('open') && !e.target.closest('#topCard')) toggleActivity(false); });
 
   // =====================================================================
   // APPELS
@@ -231,6 +268,7 @@
     calls.forEach((c) => state.known.add(c.id));
     state.calls = calls;
     renderCalls();
+    renderActivity();
     loadStats().catch(() => {});
     if (fresh.length || !state.quotes) loadQuotes({ silent: true }).catch(() => {});
     if (fresh.length) {
@@ -776,6 +814,7 @@
     if (!silent && !state.quotes) $('#quoteList').innerHTML = skeletons(2);
     const [list] = await Promise.all([api('/quotes'), state.qsettings ? null : loadQuoteSettings()]);
     state.quotes = list;
+    renderActivity();
     const todo = list.filter((x) => x.status === 'a_valider').length;
     $('#qBadge').hidden = !todo; $('#qBadge').textContent = todo;
     if (!state.qfilter) state.qfilter = todo ? 'a_valider' : 'all';
