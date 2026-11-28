@@ -3,6 +3,7 @@
 import { one, all } from './db.js';
 import { geocode } from './geo.js';
 import { normNumber } from './providers.js';
+import { sendNotice } from './email.js';
 
 // Durées sur place (mêmes valeurs que l'appli)
 const DIAG_MIN = { DPE: 45, Amiante: 45, Plomb: 30, 'Électricité': 30, Gaz: 30, Termites: 20, Carrez: 15, Boutin: 15, ERP: 5, 'Audit énergétique': 90 };
@@ -59,8 +60,8 @@ function periodOf(pref) {
   return ['matin', 'apres-midi'];
 }
 
-async function busyOf(clientId, day) {
-  const appts = await all('SELECT win_start, duration_min FROM appointments WHERE client_id = $1 AND day = $2', [clientId, day]);
+async function busyOf(clientId, day, exceptId = null) {
+  const appts = await all('SELECT win_start, duration_min FROM appointments WHERE client_id = $1 AND day = $2 AND cancelled_at IS NULL AND id IS DISTINCT FROM $3', [clientId, day, exceptId]);
   return {
     count: appts.length,
     intervals: appts.filter((a) => a.win_start != null).map((a) => [a.win_start - TRAVEL, a.win_start + a.duration_min + TRAVEL]),
@@ -132,4 +133,74 @@ export async function linkAgentAppointments(clientId, call) {
     [clientId, call.caller_number, call.id]);
   if (rows.length) await one(`UPDATE calls SET status = 'rdv_pris' WHERE id = $1 RETURNING id`, [call.id]);
   return rows.length;
+}
+
+// ---------- Rendez-vous existants : retrouver, annuler, déplacer ----------
+const norm = (s) => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\b(madame|monsieur|mme|mr|m)\b\.?/g, '').replace(/[^a-z]+/g, ' ').trim();
+const nameMatches = (a, b) => { const x = norm(a), y = norm(b); return x.length >= 3 && y.length >= 3 && (x.includes(y) || y.includes(x) || x.split(' ').some((w) => w.length >= 3 && y.split(' ').includes(w))); };
+const cityOf = (address) => (/\b\d{5}\s+([^,]+)/.exec(address || '')?.[1] || String(address || '').split(',').pop() || '').trim();
+const apptText = (a) => `${slotLabel(a.day, a.win_start ?? 480).replace(/ à 8 h$/, '')}${a.win_start == null ? ' (heure à définir)' : ''}, à ${cityOf(a.address)}`;
+const dayStr = (d) => (d instanceof Date ? d.toISOString().slice(0, 10) : String(d).slice(0, 10));
+
+async function upcoming(client) {
+  const rows = await all(`SELECT id, day, name, phone, address, win_start, duration_min, diagnostics, notes FROM appointments
+    WHERE client_id = $1 AND cancelled_at IS NULL AND NOT done AND day >= $2 ORDER BY day, win_start NULLS LAST`, [client.id, parisToday()]);
+  return rows.map((r) => ({ ...r, day: dayStr(r.day) }));
+}
+
+/** Rendez-vous à venir du client : par numéro de téléphone, sinon par nom. */
+export async function findAppointments(client, b) {
+  const tel = normNumber(b.telephone);
+  const list = await upcoming(client);
+  let found = tel ? list.filter((a) => a.phone && a.phone === tel) : [];
+  if (!found.length && b.nom) found = list.filter((a) => nameMatches(a.name, b.nom));
+  if (!found.length) return { trouve: false, consigne: 'Aucun rendez-vous à venir trouvé. Demande le nom exact utilisé lors de la prise de rendez-vous et le numéro donné, puis réessaie une fois. Sinon, note la demande pour que le diagnostiqueur rappelle.' };
+  return {
+    trouve: true,
+    rendez_vous: found.slice(0, 5).map((a) => ({ rdv_id: a.id, texte: apptText(a), nom: a.name })),
+    consigne: 'Lis le jour et la ville au client pour qu\'il confirme que c\'est bien ce rendez-vous. Ne lis jamais l\'adresse complète.',
+  };
+}
+
+async function ownAppointment(client, b) {
+  const id = Number(b.rdv_id);
+  const a = id ? await one('SELECT * FROM appointments WHERE id = $1 AND client_id = $2 AND cancelled_at IS NULL AND NOT done', [id, client.id]) : null;
+  if (!a) return { err: { ok: false, raison: 'Rendez-vous introuvable. Utilise d\'abord trouver_rdv.' } };
+  const tel = normNumber(b.telephone);
+  if (!((tel && a.phone && tel === a.phone) || (b.nom && nameMatches(a.name, b.nom)))) {
+    return { err: { ok: false, raison: 'Le nom ou le numéro ne correspond pas à ce rendez-vous. Ne modifie rien : note la demande, le diagnostiqueur rappellera.' } };
+  }
+  return { a: { ...a, day: dayStr(a.day) } };
+}
+
+/** Annulation demandée par le client : le RDV sort de la tournée, le cabinet est prévenu. */
+export async function cancelAppointment(client, b) {
+  const { a, err } = await ownAppointment(client, b); if (err) return err;
+  const why = String(b.raison || '').slice(0, 300);
+  await one(`UPDATE appointments SET cancelled_at = NOW(), notes = TRIM(COALESCE(notes, '') || ' ' || $2) WHERE id = $1 RETURNING id`,
+    [a.id, `Annulé par le client au téléphone${why ? ` (${why})` : ''}.`]);
+  const when = apptText(a);
+  console.log(`[rdv] ${a.id} annulé par le client pour ${client.name}`);
+  sendNotice(client, `Rendez-vous annulé : ${a.name}`, [`${a.name} a annulé son rendez-vous du ${when}.`, why ? `Raison : ${why}` : '', `Adresse : ${a.address}`, 'Il a été retiré de la tournée.'].filter(Boolean)).catch(() => {});
+  return { ok: true, confirmation: `Le rendez-vous du ${when} est annulé. Le diagnostiqueur est prévenu.` };
+}
+
+/** Déplacement vers un créneau proposé par creneaux_disponibles. */
+export async function moveAppointment(client, b) {
+  const { a, err } = await ownAppointment(client, b); if (err) return err;
+  const m = /^(\d{4}-\d{2}-\d{2})[ T](\d{1,2}):(\d{2})/.exec(String(b.creneau || ''));
+  if (!m) return { ok: false, raison: 'Créneau invalide. Utilise une valeur « creneau » renvoyée par creneaux_disponibles.' };
+  const day = m[1]; const start = Number(m[2]) * 60 + Number(m[3]);
+  const inHours = Object.values(BLOCKS).some(([x, z]) => start >= x && start < z);
+  const busy = await busyOf(client.id, day, a.id);
+  if (day <= parisToday() || weekday(day) === 0 || weekday(day) === 6 || !inHours || busy.count >= MAX_PER_DAY || !fits(start, a.duration_min, busy.intervals)) {
+    return { ok: false, raison: 'Ce créneau n\'est pas libre.', ...(await findSlots(client, { diagnostics: a.diagnostics, jour: day })) };
+  }
+  const before = apptText(a);
+  await one(`UPDATE appointments SET day = $2, win_start = $3, win_end = $3, notes = TRIM(COALESCE(notes, '') || ' ' || $4) WHERE id = $1 RETURNING id`,
+    [a.id, day, start, `Déplacé par le client au téléphone (avant : ${before}) : à confirmer.`]);
+  const after = slotLabel(day, start);
+  console.log(`[rdv] ${a.id} déplacé par le client pour ${client.name} : ${day}`);
+  sendNotice(client, `Rendez-vous déplacé : ${a.name}`, [`${a.name} a déplacé son rendez-vous.`, `Avant : ${before}`, `Maintenant : ${after}`, `Adresse : ${a.address}`, 'À confirmer dans la tournée.']).catch(() => {});
+  return { ok: true, confirmation: `C'est noté, le rendez-vous est déplacé au ${after}. Le diagnostiqueur le confirmera.` };
 }

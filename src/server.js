@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { q, one, all, migrate } from './db.js';
 import { fromVapi, fromRetell, fromGeneric, normNumber } from './providers.js';
 import { fromTelnyx, listFinishedConversations } from './telnyx.js';
-import { findSlots, bookSlot, linkAgentAppointments } from './booking.js';
+import { findSlots, bookSlot, linkAgentAppointments, findAppointments, cancelAppointment, moveAppointment } from './booking.js';
 import { classify } from './ai.js';
 import { sendCallEmail, sendQuoteEmail } from './email.js';
 import { quoteFromCall, saveQuote, listQuotes, settingsOf, cleanSettings, guessDiagnostics, buildLines, quotePage, QUOTE_FIELDS, DIAG_LIST } from './quotes.js';
@@ -167,6 +167,18 @@ app.all('/tools/telnyx/reserver', wrap(async (req, res) => {
   const client = await toolClient(req, res); if (!client) return;
   res.json(await bookSlot(client, toolArgs(req)));
 }));
+app.all('/tools/telnyx/trouver_rdv', wrap(async (req, res) => {
+  const client = await toolClient(req, res); if (!client) return;
+  res.json(await findAppointments(client, toolArgs(req)));
+}));
+app.all('/tools/telnyx/annuler_rdv', wrap(async (req, res) => {
+  const client = await toolClient(req, res); if (!client) return;
+  res.json(await cancelAppointment(client, toolArgs(req)));
+}));
+app.all('/tools/telnyx/deplacer_rdv', wrap(async (req, res) => {
+  const client = await toolClient(req, res); if (!client) return;
+  res.json(await moveAppointment(client, toolArgs(req)));
+}));
 
 // Telnyx : Diago va aussi chercher lui-même les appels terminés (au cas où un webhook n'arrive pas).
 let lastSync = 0, syncing = null;
@@ -232,7 +244,7 @@ api.get('/calls', wrap(async (req, res) => {
             c.callback_before, c.address, c.diagnostics, c.is_spam, r.day AS appt_day, r.win_start AS appt_start,
             dq.id AS quote_id, dq.total_ttc AS quote_total, dq.status AS quote_status
        FROM calls c
-       LEFT JOIN LATERAL (SELECT day, win_start FROM appointments a WHERE a.call_id = c.id ORDER BY day, win_start NULLS LAST LIMIT 1) r ON TRUE
+       LEFT JOIN LATERAL (SELECT day, win_start FROM appointments a WHERE a.call_id = c.id AND a.cancelled_at IS NULL ORDER BY day, win_start NULLS LAST LIMIT 1) r ON TRUE
        LEFT JOIN LATERAL (SELECT id, total_ttc, status FROM quotes x WHERE x.call_id = c.id ORDER BY id DESC LIMIT 1) dq ON TRUE
       WHERE c.client_id = $1 AND NOT c.is_spam
       ORDER BY (c.status = 'a_rappeler') DESC,
@@ -303,13 +315,13 @@ async function apptValues(body, existing = {}, near = null) {
 
 api.get('/appointments', wrap(async (req, res) => {
   const day = isDay(req.query.day) ? req.query.day : today();
-  res.json(await all(`SELECT ${APPT_FIELDS} FROM appointments WHERE client_id = $1 AND day = $2 ORDER BY created_at`, [req.client.id, day]));
+  res.json(await all(`SELECT ${APPT_FIELDS} FROM appointments WHERE client_id = $1 AND day = $2 AND cancelled_at IS NULL ORDER BY created_at`, [req.client.id, day]));
 }));
 // Nombre de rendez-vous par jour sur un mois (pour le calendrier de la tournée)
 api.get('/appointments/month', wrap(async (req, res) => {
   const m = /^\d{4}-\d{2}$/.test(req.query.month || '') ? req.query.month : today().slice(0, 7);
   const rows = await all(`SELECT to_char(day, 'YYYY-MM-DD') AS day, COUNT(*)::int AS n, COUNT(*) FILTER (WHERE done)::int AS done
-    FROM appointments WHERE client_id = $1 AND to_char(day, 'YYYY-MM') = $2 GROUP BY 1 ORDER BY 1`, [req.client.id, m]);
+    FROM appointments WHERE client_id = $1 AND to_char(day, 'YYYY-MM') = $2 AND cancelled_at IS NULL GROUP BY 1 ORDER BY 1`, [req.client.id, m]);
   res.json(rows);
 }));
 api.post('/appointments', wrap(async (req, res) => {
@@ -349,7 +361,7 @@ api.get('/route', wrap(async (req, res) => {
   const c = req.client;
   const day = isDay(req.query.day) ? req.query.day : today();
   const start = minOrNull(req.query.start) ?? c.day_start;
-  const appts = await all(`SELECT ${APPT_FIELDS} FROM appointments WHERE client_id = $1 AND day = $2 ORDER BY created_at`, [c.id, day]);
+  const appts = await all(`SELECT ${APPT_FIELDS} FROM appointments WHERE client_id = $1 AND day = $2 AND cancelled_at IS NULL ORDER BY created_at`, [c.id, day]);
   if (c.home_lat == null) return res.json({ day, start, needs_home: true, appointments: appts });
   const home = { lat: c.home_lat, lon: c.home_lon, address: c.home_address };
   const plan = await planDay(home, appts, start);

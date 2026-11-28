@@ -91,6 +91,7 @@ export async function migrate() {
       created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
     CREATE INDEX IF NOT EXISTS appts_client_day_idx ON appointments (client_id, day);
+    ALTER TABLE appointments ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ;
 
     CREATE TABLE IF NOT EXISTS quotes (
       id              SERIAL PRIMARY KEY,

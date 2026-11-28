@@ -89,3 +89,27 @@ export async function sendQuoteEmail(client, quote, settings) {
     return { ok: false, error: "L'email n'a pas pu partir" };
   }
 }
+
+/** Petit avis au cabinet (annulation, déplacement de rendez-vous par l'agent). */
+export async function sendNotice(client, subject, lines) {
+  if (!client.email) return false;
+  const link = BASE ? `${BASE}/?t=${client.token}` : '';
+  const html = `
+  <div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:520px;margin:auto;color:#1f2a3d">
+    <p style="font-size:13px;color:#5d6879;margin:0 0 4px">Diago · ${esc(client.name)}</p>
+    <h2 style="margin:0 0 14px;font-size:20px">${esc(subject)}</h2>
+    ${lines.map((l) => `<p style="margin:0 0 8px">${esc(l)}</p>`).join('')}
+    ${link ? `<p style="margin:20px 0"><a href="${link}" style="background:#2f5e45;color:#fff;text-decoration:none;padding:12px 20px;border-radius:999px;font-weight:600">Ouvrir Diago</a></p>` : ''}
+  </div>`;
+  if (!KEY) { console.log(`[email] (pas de clé Resend) → ${client.email} : ${subject}`); return false; }
+  try {
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${KEY}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ from: FROM, to: client.email.split(',').map((x) => x.trim()), subject, html }),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${await res.text()}`);
+    return true;
+  } catch (err) { console.warn('[email] avis non envoyé :', err.message); return false; }
+}
