@@ -143,7 +143,8 @@ function optimize(fixed, free, appts, M, start) {
 export async function planDay(home, appts, start) {
   const placed = appts.filter((a) => a.lat != null && a.lon != null);
   const missing = appts.filter((a) => a.lat == null || a.lon == null).map((a) => a.id);
-  if (!placed.length) return { stops: [], missing, source: 'none' };
+  const empty = { stops: [], km: 0, drive_min: 0, late_count: 0, wait_min: 0, back: null, geometry: null };
+  if (!placed.length) return { source: 'none', missing, optimized: empty, entered: empty };
 
   const points = [home, ...placed];
   const M = await matrix(points);

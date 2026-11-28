@@ -305,6 +305,13 @@ api.get('/appointments', wrap(async (req, res) => {
   const day = isDay(req.query.day) ? req.query.day : today();
   res.json(await all(`SELECT ${APPT_FIELDS} FROM appointments WHERE client_id = $1 AND day = $2 ORDER BY created_at`, [req.client.id, day]));
 }));
+// Nombre de rendez-vous par jour sur un mois (pour le calendrier de la tournée)
+api.get('/appointments/month', wrap(async (req, res) => {
+  const m = /^\d{4}-\d{2}$/.test(req.query.month || '') ? req.query.month : today().slice(0, 7);
+  const rows = await all(`SELECT to_char(day, 'YYYY-MM-DD') AS day, COUNT(*)::int AS n, COUNT(*) FILTER (WHERE done)::int AS done
+    FROM appointments WHERE client_id = $1 AND to_char(day, 'YYYY-MM') = $2 GROUP BY 1 ORDER BY 1`, [req.client.id, m]);
+  res.json(rows);
+}));
 api.post('/appointments', wrap(async (req, res) => {
   const v = await apptValues(req.body || {}, {}, nearOf(req.client));
   const callId = req.body?.call_id ? Number(req.body.call_id) : null;

@@ -726,7 +726,36 @@
   $('#routeBody').addEventListener('change', (e) => { if (e.target.id === 'startSel') { state.start = Number(e.target.value); loadRoute(); } });
   $('#dayPrev').addEventListener('click', () => { state.day = addDays(state.day, -1); loadRoute(); });
   $('#dayNext').addEventListener('click', () => { state.day = addDays(state.day, 1); loadRoute(); });
-  $('#dayPick').addEventListener('click', () => { const i = $('#dayInput'); try { i.showPicker(); } catch { i.focus(); i.click(); } });
+  // Calendrier du mois : les jours avec des rendez-vous sont marqués
+  async function openCalendar(month = state.day.slice(0, 7)) {
+    let rows = [];
+    try { rows = await api(`/appointments/month?month=${month}`); } catch (err) { toast(err.message); }
+    const counts = Object.fromEntries(rows.map((r) => [r.day, r]));
+    const [y, mo] = month.split('-').map(Number);
+    const first = new Date(Date.UTC(y, mo - 1, 1)), nDays = new Date(Date.UTC(y, mo, 0)).getUTCDate();
+    const lead = (first.getUTCDay() + 6) % 7;
+    const label = first.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+    const shift = (k) => { const d = new Date(Date.UTC(y, mo - 1 + k, 1)); return d.toISOString().slice(0, 7); };
+    const total = rows.reduce((t, r) => t + r.n, 0);
+    let cells = '';
+    for (let i = 0; i < lead; i++) cells += '<span></span>';
+    for (let d = 1; d <= nDays; d++) {
+      const iso = `${month}-${String(d).padStart(2, '0')}`, c = counts[iso];
+      const cls = [iso === todayIso() ? 'today' : '', iso === state.day ? 'sel' : '', c ? 'has' : '', c && c.done === c.n ? 'alldone' : ''].join(' ');
+      cells += `<button type="button" class="cal-d ${cls}" data-day="${iso}"><b>${d}</b>${c ? `<i>${c.n}</i>` : ''}</button>`;
+    }
+    openSheet('Calendrier', total ? `${total} rendez-vous ce mois-ci` : 'Aucun rendez-vous ce mois-ci', `
+      <div class="cal-head"><button type="button" class="btn icon" data-m="${shift(-1)}" aria-label="Mois précédent">${ic('left')}</button><b>${label.replace(/^./, (x) => x.toUpperCase())}</b><button type="button" class="btn icon" data-m="${shift(1)}" aria-label="Mois suivant">${ic('right')}</button></div>
+      <div class="cal-grid cal-wd">${['L', 'M', 'M', 'J', 'V', 'S', 'D'].map((w) => `<span>${w}</span>`).join('')}</div>
+      <div class="cal-grid">${cells}</div>
+      <p class="muted" style="font-size:13px;margin:12px 2px 0">Le chiffre indique le nombre de rendez-vous. En vert : tous terminés.</p>
+      <button type="button" class="btn" data-day="${todayIso()}" style="width:100%;margin-top:12px">Aujourd'hui</button>`);
+    $('#shBody').onclick = (e) => {
+      const m = e.target.closest('[data-m]'); if (m) return openCalendar(m.dataset.m);
+      const d = e.target.closest('[data-day]'); if (d) { state.day = d.dataset.day; closeSheet(); $('#shBody').onclick = null; loadRoute(); }
+    };
+  }
+  $('#dayPick').addEventListener('click', () => openCalendar());
   $('#dayInput').addEventListener('change', (e) => { if (e.target.value) { state.day = e.target.value; loadRoute(); } });
 
   // =====================================================================

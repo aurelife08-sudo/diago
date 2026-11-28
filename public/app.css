@@ -348,3 +348,16 @@ audio { width: 100%; margin-top: 4px; }
 .preview-x { width: 40px; height: 40px; border: 0; border-radius: 50%; display: grid; place-items: center; cursor: pointer; background: rgba(118,118,128,.14); color: var(--text); }
 .preview-x svg { width: 18px; height: 18px; }
 .preview iframe { flex: 1; width: 100%; border: 0; background: #f3f2ee; }
+
+/* ===== Calendrier de la tournée ===== */
+.cal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; font-size: 17px; }
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+.cal-wd span { text-align: center; font-size: 12px; font-weight: 600; color: var(--faint); padding: 4px 0; }
+.cal-d { position: relative; aspect-ratio: 1; border: 0; border-radius: 14px; background: none; cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; font: inherit; color: var(--text); }
+.cal-d b { font-weight: 500; font-size: 15px; }
+.cal-d i { font-style: normal; font-size: 10.5px; font-weight: 700; min-width: 18px; height: 16px; line-height: 16px; padding: 0 5px; border-radius: 999px; background: var(--accent); color: #fff; }
+.cal-d.alldone i { background: rgba(47,94,69,.18); color: var(--accent); }
+.cal-d.has { background: rgba(47,94,69,.07); }
+.cal-d.today b { color: var(--accent); font-weight: 700; }
+.cal-d.sel { box-shadow: inset 0 0 0 2px var(--accent); }
+.cal-d:active { transform: scale(.94); }
