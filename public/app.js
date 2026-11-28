@@ -125,6 +125,17 @@
     $('#overlay').hidden = true; $('#sheet').hidden = true; state.callId = null;
     if (/^#call-/.test(location.hash)) history.replaceState(null, '', location.pathname + location.search);
   }
+  // Aperçu du devis dans Diago, avec une croix pour revenir (l'app de l'écran d'accueil n'a pas de bouton retour)
+  function openPreview(url) {
+    const box = document.createElement('div');
+    box.className = 'preview';
+    box.innerHTML = `<div class="preview-bar"><button type="button" class="preview-x" aria-label="Fermer l'aperçu">${ic('x')}</button><b>Aperçu du devis</b><span></span></div><iframe src="${url}" title="Aperçu du devis"></iframe>`;
+    const close = () => { box.classList.add('out'); setTimeout(() => box.remove(), 250); document.removeEventListener("keydown", onKey); };
+    const onKey = (e) => { if (e.key === "Escape") close(); };
+    box.querySelector('.preview-x').addEventListener('click', close);
+    document.addEventListener("keydown", onKey);
+    document.body.append(box);
+  }
   // Écran sans lien : on peut coller son lien (ou juste le code) pour se connecter
   $('#gateForm').addEventListener('submit', (e) => {
     e.preventDefault();
@@ -815,7 +826,7 @@
         </div>
         <div class="card group"><label class="field"><span>Note sur le devis (visible par le client)</span><textarea name="notes" placeholder="Ex. : accès par le garage, clés chez le voisin…">${esc(d.notes || '')}</textarea></label></div>
         <div id="qAlt"></div>
-        ${qt ? `<div class="two"><a class="btn" href="/api/quotes/${d.id}/apercu?t=${encodeURIComponent(token)}" target="_blank" rel="noopener">${ic('eye')}Aperçu</a>${d.call_id ? `<button type="button" class="btn" id="qCall">${ic('phone')}Voir l'appel</button>` : '<span></span>'}</div>` : ''}
+        ${qt ? `<div class="two"><button type="button" class="btn" id="qPreview">${ic('eye')}Aperçu</button>${d.call_id ? `<button type="button" class="btn" id="qCall">${ic('phone')}Voir l'appel</button>` : '<span></span>'}</div>` : ''}
         ${qt && d.status === 'envoye' ? `<div class="section-t" style="margin:4px 6px 0">Réponse du client</div>
           <div class="two"><button type="button" class="btn primary" data-st="accepte">${ic('check')}Accepté</button><button type="button" class="btn danger" data-st="refuse">${ic('x')}Refusé</button></div>` : ''}
         ${qt && (d.status === 'accepte' || d.status === 'refuse') ? `<div class="banner ${d.status === 'refuse' ? 'bad' : ''}" style="margin:0">Devis ${QST[d.status].toLowerCase()}${d.accepted_at && d.status === 'accepte' ? ` le ${new Date(d.accepted_at).toLocaleDateString('fr-FR')}` : ''}. <button type="button" class="link" data-st="envoye">Annuler</button></div>` : ''}
@@ -895,6 +906,7 @@
       state.quotes = (state.quotes || []).filter((x) => x.id !== saved.id);
       closeSheet(); renderQuotes(); loadQuotes({ silent: true }).catch(() => {}); toast('Devis supprimé');
     });
+    $('#qPreview')?.addEventListener('click', () => openPreview(`/api/quotes/${d.id}/apercu?t=${encodeURIComponent(token)}`));
     $('#qCall')?.addEventListener('click', () => { show('calls'); openCall(d.call_id).catch((err) => toast(err.message)); });
     // Décision : le devis se range tout seul dans la bonne case
     const classify = async (st) => {
